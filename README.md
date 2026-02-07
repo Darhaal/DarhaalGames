@@ -65,7 +65,7 @@ A digital adaptation of the psychological card game involving bluffing and deduc
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/Darhaal/DarhaalGames
+    git clone [https://github.com/your-username/online-games.git](https://github.com/your-username/online-games.git)
     cd online-games
     ```
 

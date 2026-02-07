@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import {
   ArrowLeft, Search, Users, Lock, Play, X, Loader2,
   Crown, Filter, KeyRound, Unlock, SortAsc, SortDesc,
-  Ship, Bomb, Fingerprint, ShieldAlert, Skull, ScrollText, Zap, LayoutGrid
+  Ship, Bomb, Fingerprint, ShieldAlert, Skull, ScrollText, Zap, LayoutGrid, Flag
 } from 'lucide-react';
 
 type Lang = 'ru' | 'en';
@@ -30,66 +30,72 @@ type SortOption = 'newest' | 'oldest' | 'players-desc' | 'players-asc';
 
 const TRANSLATIONS = {
   ru: {
-    title: 'Игровое Лобби', // Changed from 'Игровой Зал'
-    subtitle: 'Поиск активных сессий', // Changed from 'Присоединяйся и побеждай'
-    codePlaceholder: 'Ввести код', // Changed from 'КОД'
+    title: 'Игровое Лобби',
+    subtitle: 'Поиск активных сессий',
+    codePlaceholder: 'Ввести код',
     join: 'Войти',
-    searchPlaceholder: 'Поиск по названию...', // Changed
+    searchPlaceholder: 'Поиск по названию...',
     sort: 'Сортировка',
     sortNew: 'Новые',
     sortOld: 'Старые',
-    sortPlayers: 'Люди', // Changed from 'Игроки'
-    modes: 'Категории', // Changed from 'Режимы'
+    sortPlayers: 'Люди',
+    modes: 'Категории',
     coup: 'Coup',
-    battleship: 'Battleship',
-    mafia: 'Mafia',
-    all: 'Все игры', // Changed
-    loading: 'Загрузка списка...', // Changed
-    empty: 'Список пуст', // Changed
-    emptyDesc: 'Активных игр пока нет', // Changed
-    full: 'Полная', // Changed
-    started: 'Идет', // Changed
-    back: 'Назад', // Changed
-    private: 'Закрытая игра', // Changed
-    enterPass: 'Пароль доступа', // Changed
-    confirm: 'Войти', // Changed
+    battleship: 'Морской Бой',
+    mafia: 'Мафия',
+    minesweeper: 'Сапер',
+    flager: 'Флагер',
+    spyfall: 'Шпион',
+    all: 'Все игры',
+    loading: 'Загрузка списка...',
+    empty: 'Список пуст',
+    emptyDesc: 'Активных игр пока нет',
+    full: 'Полная',
+    started: 'Идет',
+    back: 'Назад',
+    private: 'Закрытая игра',
+    enterPass: 'Пароль доступа',
+    confirm: 'Войти',
     errorPass: 'Неверный пароль',
     errorAuth: 'Требуется авторизация',
     errorFull: 'Мест нет',
     errorNotFound: 'Игра не найдена',
-    create: 'Новая игра', // Changed
+    create: 'Новая игра',
     blocked: 'Скоро',
-    footer: 'Darhaal Games © 2026', // Changed
+    footer: 'Darhaal Games © 2026',
   },
   en: {
-    title: 'Game Lobby', // Changed
-    subtitle: 'Find active sessions', // Changed
-    codePlaceholder: 'Enter Code', // Changed
+    title: 'Game Lobby',
+    subtitle: 'Find active sessions',
+    codePlaceholder: 'Enter Code',
     join: 'Join',
-    searchPlaceholder: 'Search by name...', // Changed
+    searchPlaceholder: 'Search by name...',
     sort: 'Sort By',
     sortNew: 'Newest',
     sortOld: 'Oldest',
     sortPlayers: 'Players',
-    modes: 'Categories', // Changed
+    modes: 'Categories',
     coup: 'Coup',
     battleship: 'Battleship',
     mafia: 'Mafia',
-    all: 'All Games', // Changed
-    loading: 'Loading list...', // Changed
-    empty: 'List is empty', // Changed
-    emptyDesc: 'No active games found', // Changed
+    minesweeper: 'Minesweeper',
+    flager: 'Flager',
+    spyfall: 'Spyfall',
+    all: 'All Games',
+    loading: 'Loading list...',
+    empty: 'List is empty',
+    emptyDesc: 'No active games found',
     full: 'Full',
-    started: 'Live', // Changed
-    back: 'Back', // Changed
-    private: 'Private Game', // Changed
-    enterPass: 'Access Password', // Changed
-    confirm: 'Enter', // Changed
+    started: 'Live',
+    back: 'Back',
+    private: 'Private Game',
+    enterPass: 'Access Password',
+    confirm: 'Enter',
     errorPass: 'Invalid password',
     errorAuth: 'Login required',
     errorFull: 'Room full',
     errorNotFound: 'Game not found',
-    create: 'New Game', // Changed
+    create: 'New Game',
     blocked: 'Soon',
     footer: 'Darhaal Games © 2026',
   }
@@ -157,9 +163,14 @@ function PlayContent() {
     }
 
     const { data: { user } } = await supabase.auth.getUser();
+    const gameType = lobby.game_state.gameType || 'coup';
+
+    // --- AUTH CHECK WITH REDIRECT TO GAME ---
     if (!user) {
-      alert(t.errorAuth);
-      return;
+        // Формируем ссылку на саму игру, а не на лобби
+        const targetGameUrl = `/game/${gameType}?id=${lobby.id}`;
+        router.push(`/?returnUrl=${encodeURIComponent(targetGameUrl)}`);
+        return;
     }
 
     const { data: freshLobby, error: fetchError } = await supabase
@@ -180,7 +191,6 @@ function PlayContent() {
         return;
     }
 
-    const gameType = lobby.game_state.gameType || 'coup';
     const players = getPlayers({ ...lobby, game_state: freshLobby.game_state });
 
     if (players.some((p: any) => p.id === user.id || p.userId === user.id)) {
@@ -248,7 +258,7 @@ function PlayContent() {
           case 'battleship': return <Ship className="w-5 h-5" />;
           case 'mafia': return <Users className="w-5 h-5" />;
           case 'minesweeper': return <Bomb className="w-5 h-5" />;
-          case 'bunker': return <ShieldAlert className="w-5 h-5" />;
+          case 'flager': return <Flag className="w-5 h-5" />;
           case 'spyfall': return <Fingerprint className="w-5 h-5" />;
           case 'secret_hitler': return <Skull className="w-5 h-5" />;
           default: return <ScrollText className="w-5 h-5" />;
@@ -268,7 +278,6 @@ function PlayContent() {
 
         const isAlreadyIn = players.some((p: any) => p.id === currentUserId || p.userId === currentUserId);
 
-        // Hide playing OR finished games unless participating
         if ((l.status === 'playing' || l.status === 'finished') && !isAlreadyIn) return false;
 
         return matchesSearch && matchesMode;
@@ -285,20 +294,18 @@ function PlayContent() {
       { id: 'all', label: t.all },
       { id: 'coup', label: t.coup },
       { id: 'battleship', label: t.battleship },
+      { id: 'flager', label: t.flager },
+      { id: 'minesweeper', label: t.minesweeper },
+      { id: 'spyfall', label: t.spyfall },
       { id: 'mafia', label: t.mafia, disabled: true },
-      { id: 'minesweeper', label: 'Minesweeper', disabled: true },
   ];
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] font-sans relative overflow-x-hidden flex flex-col selection:bg-[#9e1316] selection:text-white">
-
-      {/* --- BACKGROUND FX --- */}
       <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none z-0" />
       <div className="absolute top-0 left-0 w-full h-[60vh] bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none z-0" />
-
       <div className="absolute top-[10%] left-[5%] w-64 h-64 bg-blue-500/5 rounded-full blur-[80px] pointer-events-none" />
       <div className="absolute bottom-[10%] right-[5%] w-96 h-96 bg-[#9e1316]/5 rounded-full blur-[100px] pointer-events-none" />
-
 
       <header className="sticky top-0 z-30 w-full bg-[#F8FAFC]/90 backdrop-blur-xl border-b border-[#E6E1DC] shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 md:py-4 flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4">
@@ -420,7 +427,7 @@ function PlayContent() {
                                 <div key={lobby.id} className={`group bg-white border border-[#E6E1DC] p-4 rounded-2xl flex flex-col sm:flex-row items-center gap-4 hover:shadow-lg hover:border-[#9e1316]/20 transition-all duration-300 relative overflow-hidden ${isAlreadyIn ? 'ring-1 ring-emerald-500/50 border-emerald-500/20' : ''}`}>
                                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-transparent to-[#F5F5F0] opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
 
-                                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${gameType === 'coup' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>
+                                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-sm ${gameType === 'coup' ? 'bg-orange-50 text-orange-600' : gameType === 'flager' ? 'bg-blue-50 text-blue-600' : gameType === 'spyfall' ? 'bg-purple-50 text-purple-600' : gameType === 'minesweeper' ? 'bg-red-50 text-red-600' : 'bg-gray-50 text-gray-600'}`}>
                                         {getGameIcon(gameType)}
                                     </div>
 

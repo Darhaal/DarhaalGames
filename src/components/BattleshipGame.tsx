@@ -3,10 +3,13 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
 import {
     RotateCw, Trash2, Check, Shuffle,
-    Anchor, Trophy, LogOut, Timer, Crosshair, Map, Shield, BarChart3, User, AlertCircle
+    Anchor, Trophy, Crosshair, Map, Shield, BarChart3, User, AlertCircle
 } from 'lucide-react';
-import { Ship, CellStatus, Coordinate, ShipType, FLEET_CONFIG, Orientation } from '@/types/battleship';
+import { Ship, ShipType, FLEET_CONFIG, Orientation, Coordinate } from '@/types/battleship';
 import { checkPlacement } from '@/hooks/useBattleshipGame';
+import GameHeader from './GameHeader';
+import GameRulesModal from './GameRulesModal';
+import { GAME_RULES } from '@/constants/rules';
 
 const CELL_SIZE_L = "w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10";
 const CELL_SIZE_S = "w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6";
@@ -85,7 +88,6 @@ const getShipColor = (type: ShipType) => {
     }
 };
 
-// --- КОМПОНЕНТ ЯЧЕЙКИ (MEMOIZED) ---
 const GridCell = memo(({
     x, y, status, shipPart, onClick, onMouseEnter, onContextMenu,
     onDrop, onDragOver, onDragStart, isHovered, hoverValid, size = 'large'
@@ -112,7 +114,6 @@ const GridCell = memo(({
     }
 
     if (isHovered) {
-        // FIX 2: Correct Phantom Styling
         bgClass = hoverValid
             ? "bg-emerald-500/30 ring-2 ring-emerald-500 inset z-10"
             : "bg-red-500/30 ring-2 ring-red-500 inset z-10";
@@ -145,7 +146,6 @@ const GridCell = memo(({
 });
 GridCell.displayName = 'GridCell';
 
-// --- FLEET LIST ---
 const FleetStatusList = ({ ships, isEnemy = false }: { ships: Ship[], isEnemy?: boolean }) => {
     const groups = FLEET_CONFIG.map(config => {
         const typeShips = ships.filter(s => s.type === config.type);
@@ -205,6 +205,7 @@ export default function BattleshipGame({
     const [hoverPos, setHoverPos] = useState<Coordinate | null>(null);
     const [timeLeft, setTimeLeft] = useState(60);
     const [movingShipId, setMovingShipId] = useState<string | null>(null);
+    const [showRules, setShowRules] = useState(false);
 
     const t: any = DICTIONARY[lang as 'ru' | 'en'] || DICTIONARY['ru'];
     const me = userId ? gameState.players[userId] : null;
@@ -251,7 +252,6 @@ export default function BattleshipGame({
         return { status: shot || 'empty' };
     }, [me?.shots]);
 
-    // FIX 2: Check placement for the whole ship, not just the hovered cell
     const isPlacementValid = React.useMemo(() => {
         if (!selectedType || !hoverPos) return false;
         const config = FLEET_CONFIG.find(c => c.type === selectedType);
@@ -270,7 +270,6 @@ export default function BattleshipGame({
         );
     }, [selectedType, hoverPos, orientation, myShips, movingShipId]);
 
-    // --- Logic ---
     const tryPlaceShip = (x: number, y: number, type: ShipType, existingId?: string) => {
         const config = FLEET_CONFIG.find(c => c.type === type);
         if (!config) return;
@@ -361,17 +360,22 @@ export default function BattleshipGame({
     return (
         <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans overflow-hidden relative">
             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
-            <header className="w-full max-w-6xl mx-auto p-4 flex justify-between items-center z-10 relative">
-                <button onClick={() => { leaveGame(); window.location.href='/play' }} className="p-3 bg-white border border-[#E6E1DC] rounded-xl text-gray-400 hover:text-[#9e1316] transition-all"><LogOut className="w-5 h-5" /></button>
-                <div className="text-center">
-                    <h1 className="font-black text-2xl flex items-center gap-2 justify-center text-[#1A1F26] tracking-tight"><Anchor className="w-6 h-6 text-[#9e1316]"/> BATTLESHIP</h1>
-                    <div className="text-[10px] font-bold text-[#9e1316] uppercase flex items-center gap-2 justify-center mt-1 bg-[#9e1316]/5 px-3 py-1 rounded-full border border-[#9e1316]/10">
-                        {phase === 'setup' ? t.deployment : (isMyTurn ? t.yourTurn : t.enemyTurn)}
-                        {phase === 'playing' && <span className={`flex items-center gap-1 ml-2 ${timeLeft < 15 ? 'text-red-600 animate-pulse' : 'text-gray-500'}`}><Timer className="w-3 h-3"/> {timeLeft}s</span>}
-                    </div>
-                </div>
-                <div className="w-12" />
-            </header>
+
+            <GameHeader
+                title="Battleship"
+                icon={Anchor}
+                timeLeft={timeLeft}
+                showTime={phase === 'playing'}
+                onLeave={() => { leaveGame(); window.location.href='/play' }}
+                onShowRules={() => setShowRules(true)}
+                lang={lang}
+            />
+
+            <GameRulesModal
+                isOpen={showRules}
+                onClose={() => setShowRules(false)}
+                rules={GAME_RULES[lang as 'ru' | 'en'].battleship}
+            />
 
             <main className="flex-1 flex flex-col items-center justify-center p-4 z-10 gap-6 overflow-y-auto custom-scrollbar w-full">
                 {phase === 'setup' && (
@@ -386,7 +390,6 @@ export default function BattleshipGame({
                                 <div className="w-12 h-12 rounded-full bg-[#F5F5F0] overflow-hidden border-2 border-white shadow-md opacity-80">{opponent?.avatarUrl ? <img src={opponent.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>
                             </div>
                         </div>
-                        {/* FIX 3: MOBILE LAYOUT (flex-col puts board first, then dock) */}
                         <div className="flex flex-col lg:flex-row gap-8 items-start w-full">
                             <div className="bg-white p-6 rounded-[32px] shadow-xl border border-[#E6E1DC] relative mx-auto lg:mx-0 group w-full lg:w-auto">
                                 <div className="grid grid-cols-10 gap-px bg-[#E6E1DC] border-4 border-[#1A1F26] overflow-hidden rounded-xl cursor-crosshair shadow-inner" onMouseLeave={() => setHoverPos(null)}>
@@ -409,7 +412,6 @@ export default function BattleshipGame({
                             <div className="flex-1 w-full space-y-6">
                                 <div className="bg-white p-6 rounded-[32px] shadow-sm border border-[#E6E1DC]">
                                     <h3 className="text-xs font-black uppercase mb-6 text-[#8A9099] flex items-center gap-2 tracking-widest pl-2"><Map className="w-4 h-4 text-[#1A1F26]"/> {t.fleet}</h3>
-                                    {/* FIX 3: MOBILE LAYOUT GRID (grid-cols-4 for mobile) */}
                                     <div className="grid grid-cols-4 lg:grid-cols-1 gap-3">
                                         {FLEET_CONFIG.map(ship => {
                                             const placedCount = myShips.filter((s: Ship) => s.type === ship.type).length;
@@ -436,7 +438,7 @@ export default function BattleshipGame({
                     <div className="flex flex-col w-full max-w-6xl gap-6 animate-in fade-in">
                         <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-[32px] border border-[#E6E1DC] shadow-sm w-full gap-4">
                             <div className="flex items-center gap-4 w-full md:w-1/3">
-                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{me?.avatarUrl ? <img src={me.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-gray-400 m-auto mt-2" />}</div>{isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
+                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{me?.avatarUrl ? <img src={me.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>{isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
                                 <div className="flex flex-col"><span className="font-black text-[#1A1F26] text-sm uppercase tracking-tight">{me?.name || 'You'}</span><div className="flex items-center gap-2 text-xs font-bold text-[#8A9099] bg-[#F5F5F0] px-2 py-0.5 rounded-lg mt-1"><Shield className="w-3 h-3 text-emerald-600" /><span>{me?.aliveShipsCount}/10</span></div></div>
                             </div>
                             <div className="flex flex-col items-center justify-center w-full md:w-1/3 order-first md:order-none"><div className={`text-[10px] font-black uppercase tracking-[0.2em] px-6 py-2 rounded-full border shadow-sm transition-all duration-300 ${isMyTurn ? 'bg-[#9e1316] text-white border-[#9e1316] scale-105' : 'bg-white text-[#8A9099] border-[#E6E1DC]'}`}>{isMyTurn ? t.yourTurn : t.enemyTurn}</div></div>

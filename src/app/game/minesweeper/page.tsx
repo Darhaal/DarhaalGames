@@ -33,20 +33,31 @@ function MinesweeperContent() {
   const [userId, setUserId] = useState<string>();
   const [userName, setUserName] = useState<string>('');
   const [userAvatar, setUserAvatar] = useState<string>('');
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [isLeaving, setIsLeaving] = useState(false);
   const [lang, setLang] = useState<Lang>('ru');
 
+  // Auth Check Effect
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-        if (data.user) {
-            setUserId(data.user.id);
-            setUserName(data.user.user_metadata?.username || 'Player');
-            setUserAvatar(data.user.user_metadata?.avatar_url || '');
-        }
-    });
+    const checkUser = async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data.user) {
+          setUserId(data.user.id);
+          setUserName(data.user.user_metadata?.username || 'Player');
+          setUserAvatar(data.user.user_metadata?.avatar_url || '');
+      } else {
+          // Если нет юзера - редирект с сохранением пути
+          const currentPath = window.location.pathname + window.location.search;
+          router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
+      }
+      setAuthLoading(false);
+    };
+
+    checkUser();
     const savedLang = localStorage.getItem('dg_lang') as Lang;
     if (savedLang) setLang(savedLang);
-  }, []);
+  }, [router]);
 
   const {
     gameState, roomMeta, loading, lobbyDeleted,
@@ -55,11 +66,10 @@ function MinesweeperContent() {
 
   // Инициализация игрока при входе
   useEffect(() => {
-      // Инициализируем только если пользователь загружен и состояние игры доступно
       if (userId && gameState && !gameState.players[userId]) {
           initGame({ name: userName, avatarUrl: userAvatar });
       }
-  }, [userId, gameState, userName, userAvatar, initGame]); // Зависимости важны
+  }, [userId, gameState, userName, userAvatar, initGame]);
 
   const handleLeave = async () => {
       if (isLeaving) return;
@@ -70,7 +80,9 @@ function MinesweeperContent() {
 
   const t = UI_TEXT[lang];
 
-  if (loading || isLeaving) return <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]"><Loader2 className="animate-spin text-[#9e1316] w-8 h-8" /></div>;
+  if (authLoading || loading || isLeaving) return <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]"><Loader2 className="animate-spin text-[#9e1316] w-8 h-8" /></div>;
+
+  if (!userId) return null; // Ждем редиректа
 
   if (lobbyDeleted) {
     return (
@@ -85,7 +97,6 @@ function MinesweeperContent() {
 
   if (!gameState) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-400">{t.lobbyNotFound}</div>;
 
-  // ЛОББИ: Показываем если статус waiting
   if (gameState.status === 'waiting') {
       const playersList: LobbyPlayer[] = Object.values(gameState.players).map(p => ({
           id: p.id,
@@ -111,22 +122,19 @@ function MinesweeperContent() {
       );
   }
 
-  if (userId) {
-      return (
-        <MinesweeperGame
-          gameState={gameState}
-          userId={userId}
-          revealCell={revealCell}
-          toggleFlag={toggleFlag}
-          chordCell={chordCell}
-          startGame={startGame}
-          leaveGame={handleLeave}
-          handleTimeout={handleTimeout}
-          lang={lang}
-        />
-      );
-  }
-  return null;
+  return (
+    <MinesweeperGame
+      gameState={gameState}
+      userId={userId}
+      revealCell={revealCell}
+      toggleFlag={toggleFlag}
+      chordCell={chordCell}
+      startGame={startGame}
+      leaveGame={handleLeave}
+      handleTimeout={handleTimeout}
+      lang={lang}
+    />
+  );
 }
 
 export default function MinesweeperPage() {

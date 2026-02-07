@@ -4,18 +4,21 @@ import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import {
   Bomb, Flag, Trophy, Clock,
   ZoomIn, ZoomOut, LogOut, HelpCircle, X,
-  MousePointer2, Zap, LayoutGrid, Maximize, Loader2, Eye, Move,
-  Keyboard, AlertCircle, Skull, UserX, Shovel
+  MousePointer2, Zap, Maximize, Loader2, Eye, Move,
+  Keyboard, Skull, UserX
 } from 'lucide-react';
 import { MinesweeperState, MinesweeperPlayer, Cell } from '@/types/minesweeper';
 import { useRouter } from 'next/navigation';
+import GameHeader from './GameHeader';
+import GameRulesModal from './GameRulesModal';
+import { GAME_RULES } from '@/constants/rules';
 
 // --- THEME & STYLES ---
 const COLORS = {
-  hidden: "bg-slate-200 border-b-2 border-r-2 border-slate-300 hover:brightness-105",
-  open: "bg-white border-[0.5px] border-slate-100",
-  flagged: "bg-slate-200 border-b-2 border-r-2 border-slate-300",
-  mine: "bg-[#9e1316] text-white border-none",
+  hidden: "bg-slate-200 border-b-4 border-r-4 border-slate-300 hover:brightness-95 active:border-b-0 active:border-r-0 active:border-t-2 active:border-l-2 active:bg-slate-300",
+  open: "bg-[#E6E1DC] border-[0.5px] border-slate-300 shadow-inner",
+  flagged: "bg-slate-200 border-b-4 border-r-4 border-slate-300",
+  mine: "bg-[#9e1316] text-white border-none shadow-inner",
   numbers: [
     "",
     "text-blue-600", "text-emerald-600", "text-red-600", "text-indigo-700",
@@ -25,6 +28,8 @@ const COLORS = {
 
 const UI_TEXT = {
   ru: {
+    title: 'MINESWEEPER',
+    pro: 'by Darhaal',
     mines: 'МИНЫ',
     time: 'ВРЕМЯ',
     victory: 'ПОБЕДА',
@@ -40,20 +45,6 @@ const UI_TEXT = {
     timeStat: 'Время',
     dig: 'Копать',
     flag: 'Флаг',
-    rulesTitle: 'ИНСТРУКТАЖ',
-    rules: {
-       objTitle: 'Цель игры',
-       objText: 'Очистить сектор от мин. Любая ошибка фатальна.',
-       ctrlTitle: 'Управление',
-       ctrlClick: 'ЛКМ — Открыть клетку',
-       ctrlFlag: 'ПКМ / Пробел — Поставить флаг',
-       ctrlCam: 'WASD / Драг — Перемещение',
-       ctrlZoom: 'Колесо — Масштаб',
-       mechTitle: 'Механики',
-       mechNum: 'Цифра = кол-во мин вокруг (3x3).',
-       mechChord: 'Аккорд: Пробел или клик по открытой цифре -> открывает соседей (если флаги расставлены).',
-       mechSafe: 'Первый клик всегда безопасен.'
-    },
     won: 'ПОБЕДА',
     dead: 'МЕРТВ',
     alive: 'В ИГРЕ',
@@ -62,6 +53,8 @@ const UI_TEXT = {
     showResults: 'ИТОГИ'
   },
   en: {
+    title: 'MINESWEEPER',
+    pro: 'by Darhaal',
     mines: 'MINES',
     time: 'TIME',
     victory: 'VICTORY',
@@ -77,20 +70,6 @@ const UI_TEXT = {
     timeStat: 'Time',
     dig: 'Dig',
     flag: 'Flag',
-    rulesTitle: 'BRIEFING',
-    rules: {
-       objTitle: 'Game Objective',
-       objText: 'Clear the sector of mines. Any mistake is fatal.',
-       ctrlTitle: 'Controls',
-       ctrlClick: 'LMB — Open cell',
-       ctrlFlag: 'RMB / Space — Place flag',
-       ctrlCam: 'WASD / Drag — Pan camera',
-       ctrlZoom: 'Wheel — Zoom',
-       mechTitle: 'Mechanics',
-       mechNum: 'Number = count of adjacent mines.',
-       mechChord: 'Chord: Space or Click open number -> opens neighbors (if flags match).',
-       mechSafe: 'First click is always safe.'
-    },
     won: 'WON',
     dead: 'DEAD',
     alive: 'ALIVE',
@@ -112,67 +91,17 @@ interface MinesweeperGameProps {
   lang: 'ru' | 'en';
 }
 
-const RulesModal = ({ onClose, t }: { onClose: () => void, t: any }) => (
-    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
-        <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl border-4 border-[#1A1F26] overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 bg-[#1A1F26] text-white flex justify-between items-center relative overflow-hidden shrink-0">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
-                <h2 className="text-xl font-black uppercase flex items-center gap-3 relative z-10 tracking-widest">
-                    <HelpCircle className="w-6 h-6 text-[#9e1316]" /> {t.rulesTitle}
-                </h2>
-                <button onClick={onClose} className="relative z-10 p-2 hover:bg-white/10 rounded-full transition-colors"><X className="w-5 h-5" /></button>
-            </div>
-
-            <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar bg-[#F8FAFC]">
-                <section>
-                    <h3 className="text-xs font-black text-[#8A9099] uppercase tracking-widest mb-2 flex items-center gap-2">
-                        <Trophy className="w-3 h-3" /> {t.rules.objTitle}
-                    </h3>
-                    <div className="bg-white p-4 rounded-2xl border border-[#E6E1DC] shadow-sm text-sm font-bold text-[#1A1F26] leading-relaxed">
-                        {t.rules.objText}
-                    </div>
-                </section>
-                <section>
-                    <h3 className="text-xs font-black text-[#8A9099] uppercase tracking-widest mb-2 flex items-center gap-2">
-                        <Keyboard className="w-3 h-3" /> {t.rules.ctrlTitle}
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-[#E6E1DC] text-xs font-bold text-[#1A1F26]">
-                            <MousePointer2 className="w-4 h-4 text-[#9e1316]" /> {t.rules.ctrlClick}
-                        </div>
-                        <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-[#E6E1DC] text-xs font-bold text-[#1A1F26]">
-                            <Flag className="w-4 h-4 text-[#9e1316]" /> {t.rules.ctrlFlag}
-                        </div>
-                        <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-[#E6E1DC] text-xs font-bold text-[#1A1F26]">
-                            <Move className="w-4 h-4 text-[#8A9099]" /> {t.rules.ctrlCam}
-                        </div>
-                        <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-[#E6E1DC] text-xs font-bold text-[#1A1F26]">
-                            <Maximize className="w-4 h-4 text-[#8A9099]" /> {t.rules.ctrlZoom}
-                        </div>
-                    </div>
-                </section>
-                <section>
-                    <h3 className="text-xs font-black text-[#8A9099] uppercase tracking-widest mb-2 flex items-center gap-2">
-                        <Zap className="w-3 h-3" /> {t.rules.mechTitle}
-                    </h3>
-                    <ul className="space-y-2 text-xs font-medium text-gray-600">
-                        <li className="flex gap-2"><div className="w-1.5 h-1.5 mt-1.5 bg-[#9e1316] rounded-full shrink-0"/> {t.rules.mechNum}</li>
-                        <li className="flex gap-2"><div className="w-1.5 h-1.5 mt-1.5 bg-[#9e1316] rounded-full shrink-0"/> {t.rules.mechChord}</li>
-                        <li className="flex gap-2"><div className="w-1.5 h-1.5 mt-1.5 bg-[#9e1316] rounded-full shrink-0"/> {t.rules.mechSafe}</li>
-                    </ul>
-                </section>
-            </div>
-
-            <div className="p-4 border-t border-[#E6E1DC] bg-white shrink-0">
-                <button onClick={onClose} className="w-full bg-[#1A1F26] text-white py-4 rounded-2xl font-black uppercase hover:bg-[#9e1316] transition-colors shadow-lg tracking-widest text-sm">
-                    OK
-                </button>
-            </div>
-        </div>
-    </div>
-);
-
-const CellComponent = memo(({ cell, onClick, onContextMenu, onMouseEnter }: { cell: Cell, onClick: () => void, onContextMenu: (e: React.MouseEvent) => void, onMouseEnter?: () => void }) => {
+const CellComponent = memo(({
+    cell, onClick, onContextMenu, onAuxClick, onPointerDown, onPointerUp, onPointerLeave
+}: {
+    cell: Cell,
+    onClick: () => void,
+    onContextMenu: (e: React.MouseEvent) => void,
+    onAuxClick: (e: React.MouseEvent) => void,
+    onPointerDown: (e: React.PointerEvent) => void,
+    onPointerUp: (e: React.PointerEvent) => void,
+    onPointerLeave: (e: React.PointerEvent) => void
+}) => {
   let content = null;
   let styleClass = COLORS.hidden;
 
@@ -180,21 +109,24 @@ const CellComponent = memo(({ cell, onClick, onContextMenu, onMouseEnter }: { ce
     styleClass = COLORS.open;
     if (cell.isMine) {
       styleClass = COLORS.mine;
-      content = <Bomb className="w-1/2 h-1/2 fill-current animate-bounce" />;
+      content = <Bomb className="w-3/5 h-3/5 fill-current animate-bounce" />;
     } else if (cell.neighborCount > 0) {
-      content = <span className={`font-black text-sm sm:text-base select-none ${COLORS.numbers[cell.neighborCount]}`}>{cell.neighborCount}</span>;
+      content = <span className={`font-black text-sm sm:text-base md:text-lg select-none ${COLORS.numbers[cell.neighborCount]}`}>{cell.neighborCount}</span>;
     }
   } else if (cell.isFlagged) {
     styleClass = COLORS.flagged;
-    content = <Flag className="w-1/2 h-1/2 text-[#9e1316] fill-[#9e1316]" />;
+    content = <Flag className="w-3/5 h-3/5 text-[#9e1316] fill-[#9e1316]" />;
   }
 
   return (
     <div
       onClick={onClick}
       onContextMenu={onContextMenu}
-      onMouseEnter={onMouseEnter}
-      className={`${styleClass} w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center cursor-pointer transition-all duration-75 rounded-sm sm:rounded-md select-none relative`}
+      onAuxClick={onAuxClick}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerLeave}
+      className={`${styleClass} w-6 h-6 sm:w-8 sm:h-8 flex items-center justify-center cursor-pointer transition-none rounded-sm sm:rounded-md select-none relative`}
     >
       {content}
     </div>
@@ -202,16 +134,21 @@ const CellComponent = memo(({ cell, onClick, onContextMenu, onMouseEnter }: { ce
 });
 CellComponent.displayName = 'Cell';
 
+// --- BOARD VIEW ---
 const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouchModeFlag }: any) => {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
-  const hoveredCell = useRef<{x: number, y: number} | null>(null);
 
+  // Drag logic
   const isDragging = useRef(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const startOffset = useRef({ x: 0, y: 0 });
   const hasMoved = useRef(false);
+
+  // Long press logic
+  const longPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const isLongPress = useRef(false);
 
   const clampOffset = (newX: number, newY: number, z: number) => {
       if (!player.board[0]) return { x: 0, y: 0 };
@@ -225,22 +162,11 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
       };
   };
 
+  // Keyboard navigation
   useEffect(() => {
       if (!isMe) return;
       const handleKeyDown = (e: KeyboardEvent) => {
           if (player.status !== 'playing') return;
-          if (e.code === 'Space') {
-              e.preventDefault();
-              if (hoveredCell.current) {
-                  const { x, y } = hoveredCell.current;
-                  const cell = player.board[y]?.[x];
-                  if (cell) {
-                      if (cell.isOpen) onChord(x, y);
-                      else onFlag(x, y);
-                  }
-              }
-              return;
-          }
           const step = 40 / zoom;
           let newX = offset.x;
           let newY = offset.y;
@@ -255,46 +181,94 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isMe, zoom, offset, player.status, onFlag, onChord]);
+  }, [isMe, zoom, offset, player.status]);
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  // --- MOUSE / TOUCH HANDLERS ---
+
+  const handlePointerDown = (e: React.PointerEvent, cell: Cell) => {
+      if (!isMe || player.status !== 'playing') return;
+
+      // Start Long Press Timer (for mobile right click)
+      isLongPress.current = false;
+      if (e.pointerType === 'touch' && !cell.isOpen) {
+          longPressTimer.current = setTimeout(() => {
+              isLongPress.current = true;
+              if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
+              onFlag(cell.x, cell.y);
+          }, 400); // 400ms long press
+      }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+      if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+      }
+  };
+
+  const handlePointerLeave = (e: React.PointerEvent) => {
+      if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+      }
+  };
+
+  const handleCellClick = (cell: Cell) => {
+      if (hasMoved.current || isLongPress.current) return;
+      if (!isMe || player.status !== 'playing') return;
+
+      if (cell.isOpen) {
+          // Left click on open cell does nothing usually, chords are MMB or Double
+      } else {
+          if (isTouchModeFlag) {
+              onFlag(cell.x, cell.y);
+          } else {
+              if (!cell.isFlagged) {
+                  onReveal(cell.x, cell.y);
+              }
+          }
+      }
+  };
+
+  const handleAuxClick = (e: React.MouseEvent, cell: Cell) => {
+      if (e.button === 1) { // Middle Click
+          e.preventDefault();
+          if (cell.isOpen) {
+              onChord(cell.x, cell.y);
+          }
+      }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, cell: Cell) => {
+      e.preventDefault();
+      if (hasMoved.current) return;
+      if (!isMe || player.status !== 'playing') return;
+      onFlag(cell.x, cell.y);
+  };
+
+  // --- BOARD DRAG ---
+  const onContainerPointerDown = (e: React.PointerEvent) => {
+      if (e.button !== 0) return; // Only left click drags
       isDragging.current = true;
       hasMoved.current = false;
       dragStart.current = { x: e.clientX, y: e.clientY };
       startOffset.current = { ...offset };
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      containerRef.current?.setPointerCapture(e.pointerId);
   };
 
-  const onPointerMove = (e: React.PointerEvent) => {
+  const onContainerPointerMove = (e: React.PointerEvent) => {
       if (!isDragging.current) return;
       const dx = (e.clientX - dragStart.current.x) / zoom;
       const dy = (e.clientY - dragStart.current.y) / zoom;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasMoved.current = true;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) hasMoved.current = true;
       const nextX = startOffset.current.x + dx;
       const nextY = startOffset.current.y + dy;
       setOffset(clampOffset(nextX, nextY, zoom));
   };
 
-  const onPointerUp = (e: React.PointerEvent) => {
+  const onContainerPointerUp = (e: React.PointerEvent) => {
       isDragging.current = false;
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-  };
-
-  const handleCellClick = (cell: Cell) => {
-      if (hasMoved.current) return;
-      if (!isMe || player.status !== 'playing') return;
-      if (cell.isOpen) onChord(cell.x, cell.y);
-      else {
-          if (isTouchModeFlag) onFlag(cell.x, cell.y);
-          else onReveal(cell.x, cell.y);
-      }
-  };
-
-  const handleCellContext = (e: React.MouseEvent, cell: Cell) => {
-      e.preventDefault();
-      if (hasMoved.current) return;
-      if (!isMe || player.status !== 'playing') return;
-      onFlag(cell.x, cell.y);
+      containerRef.current?.releasePointerCapture(e.pointerId);
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -303,13 +277,10 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
           const delta = -e.deltaY * 0.001;
           const nextZoom = Math.min(Math.max(0.5, zoom + delta), 4);
           setZoom(nextZoom);
-          setOffset(prev => clampOffset(prev.x, prev.y, nextZoom));
       }
   };
 
   const borderColor = player.status === 'won' ? 'border-emerald-500 shadow-emerald-500/20' : (player.status === 'lost' || player.status === 'left') ? 'border-red-500 shadow-red-500/20' : 'border-[#E6E1DC] shadow-[#1A1F26]/5';
-
-  // Removed darkening for 'lost', kept for 'left'
   const overlayOpacity = (player.status === 'left') ? 'grayscale opacity-75' : '';
 
   return (
@@ -339,10 +310,10 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
 
         <div
             ref={containerRef}
-            className="flex-1 overflow-hidden relative bg-[#F8FAFC] cursor-grab active:cursor-grabbing touch-none"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
+            className="flex-1 overflow-hidden relative bg-[#F8FAFC] cursor-grab active:cursor-grabbing touch-none select-none"
+            onPointerDown={onContainerPointerDown}
+            onPointerMove={onContainerPointerMove}
+            onPointerUp={onContainerPointerUp}
             onWheel={handleWheel}
             onContextMenu={(e) => e.preventDefault()}
         >
@@ -363,20 +334,20 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
                             key={`${x}-${y}`}
                             cell={cell}
                             onClick={() => handleCellClick(cell)}
-                            onContextMenu={(e) => handleCellContext(e, cell)}
-                            onMouseEnter={() => { if(isMe) hoveredCell.current = {x, y}; }}
+                            onContextMenu={(e) => handleContextMenu(e, cell)}
+                            onAuxClick={(e) => handleAuxClick(e, cell)}
+                            onPointerDown={(e) => handlePointerDown(e, cell)}
+                            onPointerUp={handlePointerUp}
+                            onPointerLeave={handlePointerLeave}
                         />
                     )))}
                 </div>
             </div>
         </div>
 
-        {/* BIG BOARD OVERLAY FOR DEAD/WON/LEFT */}
         {player.status !== 'playing' && (
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
-                {/* Removed global backdrop for LOST/WON to allow viewing the board */}
                 {player.status === 'left' && <div className="bg-black/40 backdrop-blur-[1px] absolute inset-0" />}
-
                 {player.status === 'won' && <div className="bg-emerald-500 text-white px-4 py-2 rounded-2xl font-black uppercase tracking-widest shadow-xl animate-bounce flex items-center gap-2 z-40 transform -rotate-6 border-4 border-white"><Trophy className="w-6 h-6" /> WON</div>}
                 {player.status === 'lost' && <div className="bg-red-600 text-white px-4 py-2 rounded-2xl font-black uppercase tracking-widest shadow-xl animate-in zoom-in flex items-center gap-2 z-40 transform rotate-6 border-4 border-white"><Skull className="w-6 h-6" /> DEAD</div>}
                 {player.status === 'left' && <div className="bg-gray-700 text-white px-4 py-2 rounded-2xl font-black uppercase tracking-widest shadow-xl animate-pulse flex items-center gap-2 z-40 border-4 border-white"><UserX className="w-6 h-6" /> LEFT</div>}
@@ -434,62 +405,53 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
   return (
     <div className="h-screen bg-[#F8FAFC] flex flex-col font-sans overflow-hidden">
         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none" />
-        {showRules && <RulesModal onClose={() => setShowRules(false)} t={t} />}
 
-        <header className="shrink-0 h-20 px-6 flex justify-between items-center z-30 relative bg-white/80 backdrop-blur-md border-b border-[#E6E1DC]">
-            <div className="flex items-center gap-6">
-                <button onClick={() => { leaveGame(); router.push('/'); }} className="group p-3 hover:bg-red-50 rounded-2xl transition-all border border-transparent hover:border-red-100">
-                    <LogOut className="w-5 h-5 text-gray-400 group-hover:text-red-500" />
+        <GameRulesModal
+            isOpen={showRules}
+            onClose={() => setShowRules(false)}
+            rules={GAME_RULES[lang as 'ru' | 'en'].minesweeper}
+            themeColor="text-red-600"
+        />
+
+        <GameHeader
+            title="Minesweeper"
+            icon={Bomb}
+            timeLeft={timeLeft}
+            showTime={true}
+            onLeave={() => { leaveGame(); router.push('/'); }}
+            onShowRules={() => setShowRules(true)}
+            lang={lang}
+            accentColor="text-red-600"
+       />
+
+        {/* LOBBY CONTROLS */}
+        <div className="flex justify-center pb-4 z-20 relative px-4 gap-4 mt-4">
+             {gameState.status === 'waiting' && me.isHost && (
+                <button onClick={startGame} className="bg-[#1A1F26] text-white px-8 py-3 rounded-2xl font-black uppercase text-xs hover:bg-[#9e1316] transition-all shadow-lg hover:shadow-[#9e1316]/20 flex items-center gap-2">
+                    <Zap className="w-4 h-4" /> {t.start}
                 </button>
-                <div>
-                    <h1 className="font-black text-xl text-[#1A1F26] uppercase tracking-tight">Minesweeper</h1>
-                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase text-[#8A9099] tracking-widest mt-0.5">
-                        <span className="bg-[#F1F5F9] px-2 py-0.5 rounded">{gameState.settings.width}x{gameState.settings.height}</span>
-                        <span className="bg-[#F1F5F9] px-2 py-0.5 rounded text-[#9e1316]">{gameState.settings.minesCount} {t.mines}</span>
-                    </div>
+            )}
+            {gameState.status === 'waiting' && !me.isHost && (
+                <div className="px-6 py-3 bg-[#F5F5F0] text-[#8A9099] font-bold text-xs uppercase rounded-2xl animate-pulse tracking-widest border border-[#E6E1DC]">
+                    {t.waiting}
                 </div>
-            </div>
-
-            <div className="flex items-center gap-4">
-                <button
-                    onClick={() => setIsTouchModeFlag(!isTouchModeFlag)}
-                    className={`flex sm:hidden items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold uppercase transition-all border ${isTouchModeFlag ? 'bg-[#1A1F26] text-white border-[#1A1F26]' : 'bg-white text-[#1A1F26] border-[#E6E1DC]'}`}
-                >
-                    {isTouchModeFlag ? <Flag className="w-4 h-4" /> : <MousePointer2 className="w-4 h-4" />}
-                    <span>{isTouchModeFlag ? t.flag : t.dig}</span>
+            )}
+            {gameState.status === 'finished' && !showResults && (
+                <button onClick={() => setShowResults(true)} className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold uppercase text-xs shadow-lg animate-in zoom-in hover:bg-emerald-700">
+                    {t.showResults}
                 </button>
+            )}
+            {/* TOUCH MODE TOGGLE */}
+            <button
+                  onClick={() => setIsTouchModeFlag(!isTouchModeFlag)}
+                  className={`flex sm:hidden items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold uppercase transition-all border shadow-sm ${isTouchModeFlag ? 'bg-[#1A1F26] text-white border-[#1A1F26]' : 'bg-white text-[#1A1F26] border-[#E6E1DC]'}`}
+              >
+                  {isTouchModeFlag ? <Flag className="w-4 h-4" /> : <MousePointer2 className="w-4 h-4" />}
+                  <span>{isTouchModeFlag ? t.flag : t.dig}</span>
+            </button>
+        </div>
 
-                <div className={`flex items-center gap-3 px-5 py-3 rounded-2xl border transition-all ${timeLeft < 60 ? 'bg-red-50 border-red-200 text-red-600 animate-pulse' : 'bg-[#F8FAFC] border-[#E6E1DC] text-[#1A1F26]'}`}>
-                    <Clock className="w-5 h-5" />
-                    <span className="font-mono font-black text-xl tabular-nums">
-                        {Math.floor(timeLeft / 60).toString().padStart(2, '0')}:{(timeLeft % 60).toString().padStart(2, '0')}
-                    </span>
-                </div>
-
-                <button onClick={() => setShowRules(true)} className="p-3 bg-white border border-[#E6E1DC] hover:border-[#1A1F26] rounded-2xl text-[#1A1F26] transition-all shadow-sm hidden sm:block">
-                    <HelpCircle className="w-5 h-5" />
-                </button>
-
-                {gameState.status === 'finished' && !showResults && (
-                    <button onClick={() => setShowResults(true)} className="p-3 bg-[#1A1F26] text-white rounded-2xl font-bold uppercase text-xs shadow-lg animate-in slide-in-from-top-2">
-                        {t.showResults}
-                    </button>
-                )}
-
-                {gameState.status === 'waiting' && me.isHost && (
-                    <button onClick={startGame} className="bg-[#1A1F26] text-white px-8 py-3 rounded-2xl font-black uppercase text-sm hover:bg-[#9e1316] transition-all shadow-lg hover:shadow-[#9e1316]/20">
-                        {t.start}
-                    </button>
-                )}
-                {gameState.status === 'waiting' && !me.isHost && (
-                    <div className="px-6 py-3 bg-[#F1F5F9] text-[#8A9099] font-bold text-xs uppercase rounded-2xl animate-pulse tracking-widest">
-                        {t.waiting}
-                    </div>
-                )}
-            </div>
-        </header>
-
-        <main className={`flex-1 p-4 sm:p-6 grid gap-6 ${players.length === 1 ? 'grid-cols-1' : players.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2'} overflow-hidden`}>
+        <main className={`flex-1 px-4 pb-4 sm:px-6 sm:pb-6 grid gap-6 ${players.length === 1 ? 'grid-cols-1' : players.length === 2 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-2'} overflow-hidden`}>
             <div className={`relative ${players.length > 2 ? 'col-span-2 row-span-2 md:col-span-1 md:row-span-1' : ''}`}>
                <BoardView
                   player={me}
@@ -508,8 +470,8 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
         </main>
 
         {showResults && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-500">
-                <div className="bg-white rounded-[40px] overflow-hidden shadow-2xl max-w-2xl w-full border border-[#E6E1DC] flex flex-col max-h-[85vh]">
+            <div className="fixed inset-0 z-50 bg-[#1A1F26]/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
+                <div className="bg-white rounded-[40px] overflow-hidden shadow-2xl max-w-2xl w-full border border-[#E6E1DC] flex flex-col max-h-[85vh] animate-in zoom-in-95">
                     <div className="bg-[#1A1F26] p-8 text-white text-center relative shrink-0">
                         <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
                         <h2 className="text-4xl font-black uppercase tracking-widest text-white mb-2 relative z-10">

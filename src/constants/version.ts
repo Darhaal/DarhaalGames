@@ -1,4 +1,4 @@
-export const APP_VERSION = '1.4.5';
+export const APP_VERSION = '1.5.4';
 
 export type VersionType = 'major' | 'minor' | 'patch' | 'init';
 
@@ -11,6 +11,59 @@ export interface VersionLog {
 }
 
 export const VERSION_HISTORY: VersionLog[] = [
+  /* ===================== 1.5.x ===================== */
+
+  {
+    ver: '1.5.4',
+    date: '7 FEB 2026',
+    type: 'patch',
+    desc: {
+      ru: 'Исправлены ошибки, улучшена работа лобби, добавлены новые карточки и паки для режима «Шпион».',
+      en: 'Bug fixes, improved lobby performance, and additional cards and packs for Spy Mode.'
+    }
+  },
+
+  {
+    ver: '1.5.3',
+    date: '8 FEB 2026',
+    type: 'patch',
+    desc: {
+      ru: 'Переработаны настройки и система достижений, мелкие багфиксы и общее улучшение стабильности и производительности.',
+      en: 'Reworked settings and achievements system, minor bug fixes, and overall stability and performance improvements.'
+    }
+  },
+
+  {
+    ver: '1.5.2',
+    date: '6 FEB 2026',
+    type: 'patch',
+    desc: {
+      ru: 'Мелкие багфиксы, переработаны и упрощены правила игр, улучшена читаемость и дизайн.',
+      en: 'Minor bug fixes, reworked and simplified game rules, improved readability and design.'
+    }
+  },
+
+  {
+    ver: '1.5.1',
+    date: '6 FEB 2026',
+    type: 'patch',
+    desc: {
+      ru: 'Исправлены баги Spyfall, устранены редкие вылеты, улучшена стабильность матчей и синхронизация состояний.',
+      en: 'Fixed Spyfall bugs, resolved rare crashes, and improved match stability and state synchronization.'
+    }
+  },
+
+  {
+    ver: '1.5.0',
+    date: '5 FEB 2026',
+    type: 'minor',
+    title: { ru: 'Spy Mode', en: 'Spy Mode' },
+    desc: {
+      ru: 'Добавлен режим «Шпион», обновлён визуальный стиль интерфейса, улучшен первый опыт для новых игроков и исправлены ошибки.',
+      en: 'Added Spy Mode, refreshed the UI visual style, improved new player onboarding, and fixed bugs.'
+    }
+  },
+
   /* ===================== 1.4.x ===================== */
 
   {

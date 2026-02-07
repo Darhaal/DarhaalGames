@@ -6,13 +6,14 @@ import { supabase } from '@/lib/supabase';
 import {
   ArrowLeft, Users, Lock, Unlock,
   ScrollText, ArrowRight, Eye, EyeOff, Loader2, Type, UserPlus,
-  Bomb, Ship, ShieldAlert, Flag, Clock, Grid
+  Bomb, Ship, ShieldAlert, Flag, Clock, Grid, Fingerprint, Layers, Map, Zap
 } from 'lucide-react';
-// Types needed for initial state creation
 import { GameState as CoupState, Player as CoupPlayer } from '@/types/coup';
 import { BattleshipState, PlayerBoard as BattleshipPlayer } from '@/types/battleship';
 import { FlagerState } from '@/types/flager';
 import { MinesweeperState, MinesweeperPlayer } from '@/types/minesweeper';
+import { SpyfallState } from '@/types/spyfall';
+import { SPYFALL_PACKS } from '@/data/spyfall/locations';
 
 type Lang = 'ru' | 'en';
 
@@ -28,6 +29,18 @@ type Game = {
 
 // Configuration including blocked games
 const GAMES: Game[] = [
+  {
+    id: 'spyfall',
+    title: { ru: 'Шпион', en: 'Spyfall' },
+    desc: {
+      ru: 'Вычислите шпиона в своих рядах или не выдайте себя.',
+      en: 'Find the spy among you or blend in without being caught.'
+    },
+    minPlayers: 3,
+    maxPlayers: 12,
+    icon: <Fingerprint className="w-8 h-8 sm:w-10 sm:h-10" />,
+    disabled: false,
+  },
   {
     id: 'minesweeper',
     title: { ru: 'Сапер', en: 'Minesweeper' },
@@ -62,6 +75,7 @@ const GAMES: Game[] = [
     minPlayers: 2,
     maxPlayers: 2,
     icon: <Ship className="w-8 h-8 sm:w-10 sm:h-10" />,
+    disabled: false,
   },
   {
     id: 'coup',
@@ -74,7 +88,6 @@ const GAMES: Game[] = [
     maxPlayers: 6,
     icon: <ScrollText className="w-8 h-8 sm:w-10 sm:h-10" />,
   },
-  // --- BLOCKED GAMES ---
   {
     id: 'mafia',
     title: { ru: 'Мафия', en: 'Mafia' },
@@ -109,13 +122,15 @@ const TRANSLATIONS = {
     lobbyName: 'Название',
     enterName: 'Имя комнаты...',
     enterPass: '••••••',
-    footer: 'Darhaal Games © 2026',
-    // Minesweeper
+    footer: '© 2026 Darhaal Games Inc.',
     msSize: 'Размер поля',
     msMines: 'Плотность мин',
     msTime: 'Лимит времени',
     msTotalMines: 'Всего мин:',
-    msTotalCells: 'Клеток:'
+    msTotalCells: 'Клеток:',
+    packs: 'Набор локаций',
+    locationsPreview: 'Локации в наборе',
+    packSelected: 'выбран'
   },
   en: {
     select: 'Select Game',
@@ -136,19 +151,22 @@ const TRANSLATIONS = {
     lobbyName: 'Name',
     enterName: 'Room name...',
     enterPass: '••••••',
-    footer: 'Darhaal Games © 2026',
-    // Minesweeper
+    footer: '© 2026 Darhaal Games Inc.',
     msSize: 'Grid Size',
     msMines: 'Mine Density',
     msTime: 'Time Limit',
     msTotalMines: 'Total Mines:',
-    msTotalCells: 'Cells:'
+    msTotalCells: 'Cells:',
+    packs: 'Location Pack',
+    locationsPreview: 'Locations in pack',
+    packSelected: 'selected'
   }
 };
 
 export default function CreatePage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [lang, setLang] = useState<Lang>('ru');
   const [step, setStep] = useState<'selection' | 'settings'>('selection');
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
@@ -166,15 +184,30 @@ export default function CreatePage() {
   const [roundDuration, setRoundDuration] = useState(60);
 
   // Minesweeper Custom Settings
-  const [msSize, setMsSize] = useState(20); // Square size (e.g. 20x20)
-  const [msMineDensity, setMsMineDensity] = useState(15); // Percentage
-  const [msTimeLimit, setMsTimeLimit] = useState(20); // Minutes
+  const [msSize, setMsSize] = useState(20);
+  const [msMineDensity, setMsMineDensity] = useState(15);
+  const [msTimeLimit, setMsTimeLimit] = useState(20);
+
+  // Spyfall Settings
+  const [spyTime, setSpyTime] = useState(8);
+  const [spyPack, setSpyPack] = useState<string>('standard'); // Single pack ID
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
+    const checkUser = async () => {
+        const { data } = await supabase.auth.getUser();
+        if (data.user) {
+            setUser(data.user);
+        } else {
+            const currentPath = window.location.pathname + window.location.search;
+            router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
+        }
+        setAuthLoading(false);
+    };
+    checkUser();
+
     const savedLang = localStorage.getItem('dg_lang') as Lang;
     if (savedLang) setLang(savedLang);
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (selectedGame) {
@@ -185,11 +218,13 @@ export default function CreatePage() {
             setLobbyName(`${selectedGame.title[lang]} ${suffix} - ${userName}`);
         }
 
-        // Reset defaults on game select
         if (selectedGame.id === 'minesweeper') {
             setMsSize(20);
             setMsMineDensity(15);
             setMsTimeLimit(20);
+        } else if (selectedGame.id === 'spyfall') {
+            setSpyTime(8);
+            setSpyPack('standard');
         }
     }
   }, [selectedGame, user, lang]);
@@ -198,8 +233,10 @@ export default function CreatePage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedGame || !user) return;
+    if (!selectedGame) return;
     setLoading(true);
+
+    if (!user) return;
 
     try {
       const code = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -208,9 +245,40 @@ export default function CreatePage() {
       const userName = user.user_metadata?.username || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Player';
       const userAvatar = user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
 
-      // --- INITIAL STATE GENERATION ---
+      if (selectedGame.id === 'spyfall') {
+          const initialHost = {
+              id: user.id,
+              name: userName,
+              avatarUrl: userAvatar,
+              isHost: true,
+              isSpy: false,
+              role: null,
+              isReady: true,
+              hasNominated: false,
+              score: 0
+          };
+          const spyState: SpyfallState = {
+              players: [initialHost],
+              status: 'waiting',
+              settings: {
+                  roundDuration: spyTime * 60,
+                  spyCount: 1,
+                  useCustomLocations: false,
+                  customLocations: [],
+                  packId: spyPack
+              },
+              currentLocationId: null,
+              locationList: [],
+              startTime: 0,
+              winner: null,
+              nomination: null,
+              notifications: [],
+              version: 1,
+              gameType: 'spyfall'
+          };
+          initialState = spyState;
 
-      if (selectedGame.id === 'minesweeper') {
+      } else if (selectedGame.id === 'minesweeper') {
           const totalCells = msSize * msSize;
           const minesCount = Math.floor(totalCells * (msMineDensity / 100));
           const safeMines = Math.max(1, Math.min(minesCount, totalCells - 9));
@@ -239,7 +307,7 @@ export default function CreatePage() {
                   width: msSize,
                   height: msSize,
                   minesCount: safeMines,
-                  timeLimit: msTimeLimit * 60, // sec
+                  timeLimit: msTimeLimit * 60,
                   difficulty: 'custom'
               }
           };
@@ -259,7 +327,7 @@ export default function CreatePage() {
 
       } else if (selectedGame.id === 'flager') {
           const initialHost = { id: user.id, name: userName, avatarUrl: userAvatar, isHost: true, score: 0, guesses: [], hasFinishedRound: false, roundScore: 0, history: [], isReadyForNextRound: false };
-          initialState = { players: [initialHost], status: 'waiting', targetChain: [], currentRoundIndex: 0, roundStartTime: Date.now(), lastActionTime: Date.now(), version: 1, gameType: 'flager', settings: { maxPlayers, totalRounds: rounds, roundDuration } };
+          initialState = { players: { [user.id]: initialHost }, status: 'waiting', targetChain: [], currentRoundIndex: 0, roundStartTime: Date.now(), lastActionTime: Date.now(), version: 1, gameType: 'flager', settings: { maxPlayers, totalRounds: rounds, roundDuration } };
       }
 
       const finalGameState = {
@@ -280,6 +348,11 @@ export default function CreatePage() {
     }
   };
 
+  if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]"><Loader2 className="animate-spin text-[#9e1316] w-8 h-8" /></div>;
+  if (!user) return null;
+
+  const selectedPackData = SPYFALL_PACKS.find(p => p.id === spyPack);
+
   const renderSelection = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 w-full max-w-4xl animate-in zoom-in-95 duration-500 pb-8">
       {GAMES.map(game => (
@@ -288,25 +361,24 @@ export default function CreatePage() {
           onClick={() => { if (!game.disabled) { setSelectedGame(game); setStep('settings'); } }}
           disabled={game.disabled}
           className={`
-            group relative overflow-hidden rounded-[24px] p-1 text-left transition-all duration-300
+            group relative overflow-hidden rounded-[32px] p-1 text-left transition-all duration-300
             ${game.disabled
               ? 'opacity-60 cursor-not-allowed grayscale'
-              : 'hover:scale-[1.01] hover:shadow-lg border border-[#E6E1DC] bg-white hover:border-[#9e1316]/20'
+              : 'hover:scale-[1.01] hover:shadow-xl hover:shadow-[#1A1F26]/5 border border-[#E6E1DC] bg-white hover:border-[#9e1316]/20'
             }
           `}
         >
           <div className="relative z-20 p-5 sm:p-6 flex flex-col h-full">
               <div className="flex justify-between items-start mb-4">
-                 <div className={`w-14 h-14 rounded-xl flex items-center justify-center transition-all duration-300 ${game.disabled ? 'bg-gray-100 text-gray-400' : 'bg-[#F8FAFC] text-[#1A1F26] group-hover:bg-[#1A1F26] group-hover:text-white'}`}>
+                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 ${game.disabled ? 'bg-gray-100 text-gray-400' : 'bg-[#F8FAFC] border border-[#E6E1DC] text-[#1A1F26] group-hover:bg-[#1A1F26] group-hover:text-white group-hover:border-[#1A1F26]'}`}>
                    {game.icon}
                  </div>
                  {game.disabled && <span className="text-[10px] font-bold uppercase bg-gray-100 px-2 py-1 rounded text-gray-400 tracking-wide border border-gray-200">{t.comingSoon}</span>}
               </div>
 
               <div className="mt-auto">
-                  <h3 className="text-lg font-bold text-[#1A1F26] mb-1 group-hover:text-[#9e1316] transition-colors">{game.title[lang]}</h3>
+                  <h3 className="text-xl font-black text-[#1A1F26] mb-1 group-hover:text-[#9e1316] transition-colors">{game.title[lang]}</h3>
                   <p className="text-xs font-medium text-gray-500 leading-relaxed min-h-[40px]">{game.desc[lang]}</p>
-
                   <div className="flex items-center gap-1.5 text-xs font-bold text-[#1A1F26] mt-4 pt-4 border-t border-[#F1F5F9]">
                     <Users className="w-3.5 h-3.5 text-gray-400" />
                     {game.minPlayers === game.maxPlayers ? game.minPlayers : `${game.minPlayers}-${game.maxPlayers}`}
@@ -319,26 +391,26 @@ export default function CreatePage() {
   );
 
   const renderSettings = () => (
-    <form onSubmit={handleCreate} className="w-full max-w-lg bg-white border border-[#E6E1DC] rounded-[32px] p-6 sm:p-8 shadow-xl animate-in slide-in-from-right-8 duration-500 relative overflow-hidden mb-8">
-       <div className="flex items-center gap-4 mb-6 relative z-10">
-          <div className="w-14 h-14 bg-[#1A1F26] rounded-xl flex items-center justify-center text-white shadow-md">
+    <form onSubmit={handleCreate} className="w-full max-w-lg bg-white border border-[#E6E1DC] rounded-[40px] p-8 shadow-2xl shadow-[#1A1F26]/5 animate-in slide-in-from-right-8 duration-500 relative overflow-hidden mb-8">
+       <div className="flex items-center gap-4 mb-8 relative z-10">
+          <div className="w-16 h-16 bg-[#1A1F26] rounded-2xl flex items-center justify-center text-white shadow-lg shadow-[#1A1F26]/20">
              {selectedGame?.icon}
           </div>
           <div>
-              <h2 className="text-lg font-bold text-[#1A1F26] leading-tight">{selectedGame?.title[lang]}</h2>
-              <p className="text-xs font-medium text-gray-500">{t.settingsSub}</p>
+              <h2 className="text-2xl font-black text-[#1A1F26] leading-tight">{selectedGame?.title[lang]}</h2>
+              <p className="text-xs font-bold text-[#8A9099] uppercase tracking-wider">{t.settingsSub}</p>
           </div>
        </div>
 
-       <div className="space-y-5 relative z-10">
+       <div className="space-y-6 relative z-10">
           <div className="space-y-2">
-               <label className="text-xs font-bold text-[#1A1F26] ml-1 flex items-center gap-2"><Type className="w-3.5 h-3.5 text-gray-400"/> {t.lobbyName}</label>
+               <label className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest ml-1 flex items-center gap-2"><Type className="w-3 h-3"/> {t.lobbyName}</label>
                <input
                    type="text"
                    value={lobbyName}
                    onChange={e => setLobbyName(e.target.value)}
                    placeholder={t.enterName}
-                   className="w-full bg-[#F8FAFC] border border-gray-200 focus:bg-white focus:border-[#1A1F26] rounded-xl py-3 px-4 font-medium text-[#1A1F26] outline-none transition-all placeholder:text-gray-400 text-sm"
+                   className="w-full bg-[#F8FAFC] border border-gray-200 focus:bg-white focus:border-[#1A1F26] rounded-xl py-3 px-4 font-bold text-[#1A1F26] outline-none transition-all placeholder:text-gray-400 text-sm"
                    required
                />
           </div>
@@ -346,7 +418,7 @@ export default function CreatePage() {
           {selectedGame && selectedGame.minPlayers !== selectedGame.maxPlayers && (
             <div className="space-y-3">
                <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold text-[#1A1F26] ml-1 flex items-center gap-2"><UserPlus className="w-3.5 h-3.5 text-gray-400"/> {t.players}</label>
+                    <label className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest ml-1 flex items-center gap-2"><UserPlus className="w-3.5 h-3.5 text-gray-400"/> {t.players}</label>
                     <span className="text-xs font-bold text-white bg-[#1A1F26] px-2 py-0.5 rounded">{maxPlayers}</span>
                </div>
                <input
@@ -363,6 +435,51 @@ export default function CreatePage() {
                    <span>{selectedGame?.maxPlayers}</span>
                </div>
             </div>
+          )}
+
+          {/* SPYFALL SETTINGS */}
+          {selectedGame?.id === 'spyfall' && (
+              <div className="space-y-6 pt-5 border-t border-[#F1F5F9] animate-in fade-in">
+                  <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest ml-1 flex items-center gap-2"><Clock className="w-3.5 h-3.5 text-gray-400"/> {t.duration}</label>
+                          <span className="text-xs font-bold text-white bg-[#1A1F26] px-2 py-0.5 rounded tabular-nums">{spyTime} {t.minutes}</span>
+                      </div>
+                      <input type="range" min="3" max="15" step={1} value={spyTime} onChange={e => setSpyTime(Number(e.target.value))} className="w-full h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-[#1A1F26]" />
+                  </div>
+
+                  <div className="space-y-3">
+                      <label className="text-xs font-bold text-[#1A1F26] ml-1 flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-gray-400"/> {t.packs}</label>
+                      <div className="grid grid-cols-2 gap-2">
+                          {SPYFALL_PACKS.map(pack => (
+                              <button
+                                  key={pack.id}
+                                  type="button"
+                                  onClick={() => setSpyPack(pack.id)}
+                                  className={`p-3 rounded-xl border flex items-center gap-2 transition-all ${spyPack === pack.id ? 'bg-[#1A1F26] text-white border-[#1A1F26] shadow-md' : 'bg-white text-[#1A1F26] border-[#E6E1DC] hover:border-[#1A1F26]'}`}
+                              >
+                                  <span className="text-lg">{pack.emoji}</span>
+                                  <span className="text-xs font-bold">{pack.name[lang]}</span>
+                              </button>
+                          ))}
+                      </div>
+                  </div>
+
+                  {selectedPackData && (
+                      <div className="bg-[#F8FAFC] p-4 rounded-xl border border-[#E6E1DC]">
+                          <div className="flex items-center gap-2 text-[10px] font-bold text-[#8A9099] uppercase tracking-widest mb-3">
+                              <Map className="w-3 h-3" /> {t.locationsPreview}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                              {selectedPackData.locations.map(loc => (
+                                  <span key={loc.id} className="text-[10px] font-bold bg-white px-2 py-1 rounded-md border border-[#E6E1DC] text-[#1A1F26]">
+                                      {loc.name[lang]}
+                                  </span>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+              </div>
           )}
 
           {/* MINESWEEPER MODERN SETTINGS */}
@@ -411,14 +528,14 @@ export default function CreatePage() {
             <div className="space-y-5 pt-5 border-t border-[#F1F5F9] animate-in fade-in">
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                     <label className="text-xs font-bold text-[#1A1F26] ml-1 flex items-center gap-2"><Flag className="w-3.5 h-3.5 text-gray-400"/> {t.rounds}</label>
+                     <label className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest ml-1 flex items-center gap-2"><Flag className="w-3.5 h-3.5 text-gray-400"/> {t.rounds}</label>
                      <span className="text-xs font-bold text-white bg-[#1A1F26] px-2 py-0.5 rounded">{rounds}</span>
                 </div>
                 <input type="range" min="1" max="20" step={1} value={rounds} onChange={e => setRounds(Number(e.target.value))} className="w-full h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-[#1A1F26]" />
              </div>
              <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                     <label className="text-xs font-bold text-[#1A1F26] ml-1 flex items-center gap-2"><Clock className="w-3.5 h-3.5 text-gray-400"/> {t.duration}</label>
+                     <label className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest ml-1 flex items-center gap-2"><Clock className="w-3.5 h-3.5 text-gray-400"/> {t.duration}</label>
                      <span className="text-xs font-bold text-white bg-[#1A1F26] px-2 py-0.5 rounded">{roundDuration} {t.seconds}</span>
                 </div>
                 <input type="range" min="15" max="300" step={15} value={roundDuration} onChange={e => setRoundDuration(Number(e.target.value))} className="w-full h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-[#1A1F26]" />
@@ -449,7 +566,7 @@ export default function CreatePage() {
                    value={password}
                    onChange={e => setPassword(e.target.value)}
                    placeholder={t.enterPass}
-                   className="w-full bg-[#F8FAFC] border border-gray-200 focus:bg-white focus:border-[#1A1F26] rounded-xl py-3 px-4 font-bold text-[#1A1F26] outline-none transition-all placeholder:text-gray-400 text-sm"
+                   className="w-full bg-[#F8FAFC] border border-gray-200 focus:bg-white focus:border-[#1A1F26] rounded-xl py-3 px-4 font-bold text-[#1A1F26] outline-none transition-all placeholder:text-gray-400 text-sm text-center"
                    required={isPrivate}
                  />
                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-3.5 text-gray-400 hover:text-[#1A1F26]">
@@ -462,7 +579,7 @@ export default function CreatePage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-[#1A1F26] text-white py-4 rounded-xl font-bold uppercase tracking-wide hover:bg-[#9e1316] hover:shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3 mt-2"
+            className="w-full bg-[#1A1F26] text-white py-4 rounded-xl font-black uppercase tracking-wide hover:bg-[#9e1316] hover:shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3 mt-2"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <> {t.create} <ArrowRight className="w-4 h-4" /> </>}
           </button>
@@ -489,7 +606,6 @@ export default function CreatePage() {
                 </p>
             </div>
           </div>
-          {/* Spacer to mimic the Play page layout or keep it empty for clean look */}
           <div className="hidden md:block w-32" />
         </div>
       </header>
@@ -500,8 +616,8 @@ export default function CreatePage() {
       </div>
 
       <footer className="w-full p-8 text-center z-10 opacity-40 hover:opacity-100 transition-opacity">
-        <p className="text-[#1A1F26] text-[10px] font-black uppercase tracking-[0.3em] cursor-default">
-          {t.footer}
+        <p className="text-[#1A1F26] text-[10px] font-black uppercase tracking-[0.3em] cursor-default flex items-center justify-center gap-2">
+            <Zap className="w-3 h-3 text-[#9e1316]" /> {t.footer}
         </p>
       </footer>
     </div>

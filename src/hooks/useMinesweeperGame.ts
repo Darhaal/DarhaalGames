@@ -32,6 +32,7 @@ const generateEmptyBoard = (width: number, height: number): Cell[][] => {
 const placeMines = (board: Cell[][], width: number, height: number, minesCount: number, safeX: number, safeY: number) => {
   let minesPlaced = 0;
   const safeZone = new Set<string>();
+  // Безопасная зона 3x3 вокруг первого клика
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) safeZone.add(`${safeX + dx},${safeY + dy}`);
 
   let attempts = 0;
@@ -55,12 +56,28 @@ const placeMines = (board: Cell[][], width: number, height: number, minesCount: 
   }
 };
 
-const openCellRecursive = (board: Cell[][], x: number, y: number, width: number, height: number) => {
-    if (x < 0 || x >= width || y < 0 || y >= height || board[y][x].isOpen || board[y][x].isFlagged) return;
-    board[y][x].isOpen = true;
-    if (board[y][x].neighborCount === 0) {
-        const neighbors = getNeighbors(x, y, width, height);
-        neighbors.forEach(n => openCellRecursive(board, n.x, n.y, width, height));
+// Итеративный подход вместо рекурсии (защита от Stack Overflow)
+const openCellIterative = (board: Cell[][], startX: number, startY: number, width: number, height: number) => {
+    const stack = [{ x: startX, y: startY }];
+
+    while (stack.length > 0) {
+        const { x, y } = stack.pop()!;
+
+        if (x < 0 || x >= width || y < 0 || y >= height) continue;
+        const cell = board[y][x];
+
+        if (cell.isOpen || cell.isFlagged) continue;
+
+        cell.isOpen = true;
+
+        if (cell.neighborCount === 0) {
+            const neighbors = getNeighbors(x, y, width, height);
+            for (const n of neighbors) {
+                if (!board[n.y][n.x].isOpen && !board[n.y][n.x].isFlagged) {
+                    stack.push(n);
+                }
+            }
+        }
     }
 };
 
@@ -107,7 +124,9 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
 
                 const prevVersion = prev?.version || 0;
                 const newVersion = incoming.version || 0;
-                if (prev && newVersion < prevVersion) return prev;
+
+                // Всегда принимаем, если версия новее ИЛИ если игра закончилась (критическое обновление)
+                if (prev && newVersion < prevVersion && incoming.status === 'playing') return prev;
 
                 if (prev && userId && incoming.status === 'playing') {
                     const myPrev = prev.players[userId];
@@ -122,7 +141,9 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
                         const localMoves = countMoves(myPrev);
                         const serverMoves = countMoves(myIncoming);
 
-                        if (localMoves > serverMoves) {
+                        // BUGFIX: Если сервер прислал, что игра окончена (таймаут) или я проиграл/выиграл - принимаем это состояние,
+                        // даже если локально мы "сделали больше ходов" (накликивая в лаге).
+                        if (localMoves > serverMoves && incoming.status === 'playing' && myIncoming.status === 'playing') {
                              return {
                                  ...incoming,
                                  players: { ...incoming.players, [userId]: myPrev }
@@ -168,17 +189,12 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
           }
       }));
 
-      // Переменная isWin теперь объявлена корректно
       const isWin = (opened === totalCells - newState.settings.minesCount) ||
                     (totalFlagged === newState.settings.minesCount && correctlyFlagged === newState.settings.minesCount);
 
-      // Проверяем, чтобы не записать статистику дважды
       const isAlreadyEnded = player.status === 'won' || player.status === 'lost';
-
-      // Определение режима игры для статистики
       const playerCount = Object.keys(newState.players).length;
-      const isMulti = playerCount > 1;
-      const mode = isMulti ? 'multi' : 'single';
+      const mode = playerCount > 1 ? 'multi' : 'single';
 
       if (isWin && !isAlreadyEnded) {
           player.status = 'won';
@@ -186,14 +202,13 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
           newState.status = 'finished';
           newState.winner = player.name;
 
-          // ЗАПИСЬ СТАТИСТИКИ (ПОБЕДА)
           if (userId && player.id === userId) {
               updatePlayerStats(userId, {
                   gameType: 'minesweeper',
                   result: 'win',
                   durationSeconds: currentTime,
                   mode: mode,
-                  extraCount: correctlyFlagged // Передаем кол-во найденных мин
+                  extraCount: correctlyFlagged
               });
           }
       }
@@ -203,20 +218,17 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
           const active = Object.values(newState.players).filter(p => p.status === 'playing');
           if (active.length === 0) newState.status = 'finished';
 
-          // ЗАПИСЬ СТАТИСТИКИ (ПОРАЖЕНИЕ)
           if (userId && player.id === userId) {
               updatePlayerStats(userId, {
                   gameType: 'minesweeper',
                   result: 'loss',
                   durationSeconds: currentTime,
                   mode: mode,
-                  extraCount: correctlyFlagged // Сохраняем сколько успел найти
+                  extraCount: correctlyFlagged
               });
           }
       }
   };
-
-  // --- ACTIONS ---
 
   const initGame = async (userProfile: { name: string; avatarUrl: string }) => {
     if (!userId || !lobbyId) return;
@@ -276,6 +288,8 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
       if (!player || player.status !== 'playing') return;
       if (player.board[y][x].isOpen || player.board[y][x].isFlagged) return;
 
+      // Оптимизация: вместо полного прохода массива, можно хранить флаг hasStarted в player
+      // но для совместимости оставим так, это быстро на клиенте
       const isFirstMove = player.board.flat().every((c:any) => !c.isOpen);
       if (isFirstMove) {
           placeMines(player.board, newState.settings.width, newState.settings.height, newState.settings.minesCount, x, y);
@@ -286,9 +300,11 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
       if (cell.isMine) {
           cell.isOpen = true;
           player.status = 'lost';
+          // Показать все мины
           player.board.forEach((r:any) => r.forEach((c:any) => { if (c.isMine) c.isOpen = true; }));
       } else {
-          openCellRecursive(player.board, x, y, newState.settings.width, newState.settings.height);
+          // Используем итеративный подход
+          openCellIterative(player.board, x, y, newState.settings.width, newState.settings.height);
       }
 
       handleGameEndCheck(newState, player);
@@ -335,7 +351,7 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
                       hitMine = true;
                       nCell.isOpen = true;
                   } else {
-                      openCellRecursive(player.board, n.x, n.y, newState.settings.width, newState.settings.height);
+                      openCellIterative(player.board, n.x, n.y, newState.settings.width, newState.settings.height);
                   }
               }
           });

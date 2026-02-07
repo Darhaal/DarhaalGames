@@ -33,7 +33,14 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
       const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
       if (data) {
         setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === userId });
-        if (data.game_state) setGameState(data.game_state);
+        if (data.game_state) {
+            const safeState = data.game_state;
+            // DEFENSIVE CODING: Ensure players is always an array
+            if (!safeState.players || !Array.isArray(safeState.players)) {
+                safeState.players = [];
+            }
+            setGameState(safeState);
+        }
       } else {
         setGameState(null);
         setLobbyDeleted(true);
@@ -51,11 +58,19 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
           if (payload.new.game_state) {
             setGameState(prev => {
                 const incoming = payload.new.game_state as FlagerState;
+
+                // DEFENSIVE: Fix incoming data structure if corrupted
+                if (!incoming.players || !Array.isArray(incoming.players)) {
+                    incoming.players = [];
+                }
+
                 const prevVersion = prev?.version || 0;
                 const newVersion = incoming.version || 0;
 
+                // Optimistic update conflict resolution
                 if (prev && newVersion < prevVersion) return prev;
 
+                // Preserve local optimistic updates if version matches but we have more local info
                 if (prev && userId && incoming.status === 'playing') {
                     if (prev.currentRoundIndex !== incoming.currentRoundIndex) {
                         return incoming;
@@ -65,7 +80,8 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
                     const myIncoming = incoming.players.find(p => p.id === userId);
 
                     if (myPrev && myIncoming) {
-                        if (myPrev.guesses.length > myIncoming.guesses.length || myPrev.score > myIncoming.score) {
+                        // Keep local guesses if they are ahead of server (latency hiding)
+                        if ((myPrev.guesses?.length || 0) > (myIncoming.guesses?.length || 0) || (myPrev.score || 0) > (myIncoming.score || 0)) {
                             const mergedPlayers = incoming.players.map(p =>
                                 p.id === userId ? myPrev : p
                             );
@@ -105,9 +121,13 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
   const initGame = async (userProfile: { name: string; avatarUrl: string }) => {
     if (!userId || !stateRef.current.lobbyId) return;
 
+    // Fetch fresh state to avoid overwriting
     const { data } = await supabase.from('lobbies').select('game_state').eq('id', stateRef.current.lobbyId).single();
     const currentState = data?.game_state as FlagerState;
     if (!currentState) return;
+
+    // Fix players array if broken in DB
+    if (!currentState.players || !Array.isArray(currentState.players)) currentState.players = [];
 
     if (!currentState.players.find(p => p.id === userId)) {
       if (currentState.status !== 'waiting') return;
@@ -130,6 +150,7 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
 
       await updateState(newState);
     } else {
+        // Just update local state if already joined
         setGameState(currentState);
     }
   };
@@ -139,6 +160,8 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
     const currentGs = data?.game_state as FlagerState;
     if (!currentGs) return;
 
+    if (!currentGs.players || !Array.isArray(currentGs.players)) currentGs.players = [];
+
     const rounds = currentGs.settings.totalRounds || 5;
     const flags = generateFlags(rounds);
 
@@ -147,7 +170,6 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
       status: 'playing',
       targetChain: flags,
       currentRoundIndex: 0,
-      // Добавляем задержку к времени старта
       roundStartTime: Date.now() + START_DELAY,
       players: currentGs.players.map(p => ({
           ...p,
@@ -164,18 +186,19 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
   };
 
   const checkRoundEnd = (newState: FlagerState, targetFlag: string) => {
-      if (newState.players.length === 0) return;
+      if (!newState.players || newState.players.length === 0) return;
 
       const allFinished = newState.players.every(p => p.hasFinishedRound);
       if (allFinished) {
           newState.players.forEach(p => {
-               const lastGuess = p.guesses[p.guesses.length - 1];
+               const lastGuess = p.guesses && p.guesses.length > 0 ? p.guesses[p.guesses.length - 1] : '';
                const wasCorrect = lastGuess === targetFlag && p.roundScore > 0;
 
+               if (!p.history) p.history = [];
                p.history.push({
                    flagCode: targetFlag,
                    isCorrect: wasCorrect,
-                   attempts: p.guesses.length,
+                   attempts: p.guesses ? p.guesses.length : 0,
                    points: p.roundScore
                });
           });
@@ -187,9 +210,11 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
     const currentGs = stateRef.current.gameState;
     if (!currentGs || !userId || currentGs.status !== 'playing') return;
 
-    // Блокируем догадки во время отсчета
     const now = Date.now();
     if (now < currentGs.roundStartTime) return;
+
+    // Safety checks
+    if (!currentGs.players || !Array.isArray(currentGs.players)) return;
 
     const player = currentGs.players.find(p => p.id === userId);
     if (!player || player.hasFinishedRound) return;
@@ -198,9 +223,13 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
     const guess = guessCode.toLowerCase();
 
     const newState: FlagerState = JSON.parse(JSON.stringify(currentGs));
+    if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
+
     const pIndex = newState.players.findIndex(p => p.id === userId);
+    if (pIndex === -1) return;
     const pState = newState.players[pIndex];
 
+    if (!pState.guesses) pState.guesses = [];
     if (!pState.guesses.includes(guess)) {
         pState.guesses.push(guess);
     }
@@ -216,7 +245,7 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
 
         const points = Math.max(10, baseScore - guessPenalty - timePenalty);
 
-        pState.score += points;
+        pState.score = (pState.score || 0) + points;
         pState.roundScore = points;
         pState.hasFinishedRound = true;
     } else if (attemptsUsed >= 10) {
@@ -231,13 +260,20 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
   const handleTimeout = async () => {
     const currentGs = stateRef.current.gameState;
     if (!currentGs || !userId || currentGs.status !== 'playing') return;
+    if (!currentGs.players || !Array.isArray(currentGs.players)) return;
 
     const player = currentGs.players.find(p => p.id === userId);
     if (!player || player.hasFinishedRound) return;
 
     const newState: FlagerState = JSON.parse(JSON.stringify(currentGs));
+    if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
+
     const pIndex = newState.players.findIndex(p => p.id === userId);
+    if (pIndex === -1) return;
     const pState = newState.players[pIndex];
+
+    // Ensure targetChain exists
+    if (!currentGs.targetChain || currentGs.targetChain.length <= currentGs.currentRoundIndex) return;
     const targetFlag = currentGs.targetChain[currentGs.currentRoundIndex].toLowerCase();
 
     pState.hasFinishedRound = true;
@@ -254,6 +290,7 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
     const currentGs = data?.game_state as FlagerState;
 
     if (!currentGs || currentGs.status !== 'round_end') return;
+    if (!currentGs.players || !Array.isArray(currentGs.players)) currentGs.players = [];
 
     const newState: FlagerState = JSON.parse(JSON.stringify(currentGs));
     const pIndex = newState.players.findIndex(p => p.id === userId);
@@ -268,7 +305,6 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
         } else {
             newState.status = 'playing';
             newState.currentRoundIndex++;
-            // Добавляем задержку к времени старта
             newState.roundStartTime = Date.now() + START_DELAY;
             newState.players.forEach(p => {
                 p.guesses = [];
@@ -287,6 +323,8 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
      if (!lobbyId || !userId || !currentGs) return;
 
      const newState = JSON.parse(JSON.stringify(currentGs));
+     if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
+
      const leavingPlayer = newState.players.find((p: FlagerPlayerState) => p.id === userId);
 
      if (!leavingPlayer) return;
@@ -320,18 +358,19 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
 
   useEffect(() => {
       if (gameState?.status === 'finished' && userId && !lobbyDeleted) {
-          const me = gameState.players.find(p => p.id === userId);
-          if (me) {
-              const sorted = [...gameState.players].sort((a, b) => b.score - a.score);
-              const isWinner = sorted[0].id === userId;
+          if (gameState.players && Array.isArray(gameState.players)) {
+              const me = gameState.players.find(p => p.id === userId);
+              if (me) {
+                  const sorted = [...gameState.players].sort((a, b) => b.score - a.score);
+                  const isWinner = sorted[0].id === userId;
+                  const duration = (gameState.targetChain.length * (gameState.settings.roundDuration || 60));
 
-              const duration = (gameState.targetChain.length * (gameState.settings.roundDuration || 60));
-
-              updatePlayerStats(userId, {
-                  gameType: 'flager',
-                  result: isWinner ? 'win' : 'loss',
-                  durationSeconds: duration
-              });
+                  updatePlayerStats(userId, {
+                      gameType: 'flager',
+                      result: isWinner ? 'win' : 'loss',
+                      durationSeconds: duration
+                  });
+              }
           }
       }
   }, [gameState?.status, userId, lobbyDeleted]);

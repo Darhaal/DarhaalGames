@@ -15,12 +15,28 @@ interface UserProfile {
     avatarUrl: string;
 }
 
+const UI_TEXT = {
+  ru: {
+    lobbyNotFound: 'Лобби не найдено',
+    gameFinished: 'Игра завершена',
+    toMenu: 'В меню',
+    loading: 'Загрузка...',
+  },
+  en: {
+    lobbyNotFound: 'LOBBY NOT FOUND',
+    gameFinished: 'Game Finished',
+    toMenu: 'Main Menu',
+    loading: 'Loading...',
+  }
+};
+
 function BattleshipContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const lobbyId = searchParams.get('id');
 
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [lang, setLang] = useState<Lang>('ru');
   const [isLeaving, setIsLeaving] = useState(false);
 
@@ -33,15 +49,20 @@ function BattleshipContent() {
                 name: authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'Admiral',
                 avatarUrl: authUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${authUser.id}`
             });
+        } else {
+            const currentPath = window.location.pathname + window.location.search;
+            router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
         }
+        setAuthLoading(false);
     };
     fetchUser();
+
     const savedLang = localStorage.getItem('dg_lang') as Lang;
     if (savedLang === 'en' || savedLang === 'ru') setLang(savedLang);
-  }, []);
+  }, [router]);
 
   const {
-      gameState, roomMeta, loading, initGame, startGame, leaveGame,
+      gameState, roomMeta, loading, lobbyDeleted, initGame, startGame, leaveGame,
       autoPlaceShips, clearShips, submitShips, fireShot, myShips, placeShipManual, removeShip, handleTimeout
   } = useBattleshipGame(lobbyId, user);
 
@@ -64,7 +85,9 @@ function BattleshipContent() {
     return () => { window.removeEventListener('popstate', handlePopState); };
   }, [leaveGame]);
 
-  if (loading || isLeaving || !user) {
+  const t = UI_TEXT[lang];
+
+  if (authLoading || loading || isLeaving) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]">
             <Loader2 className="animate-spin text-[#9e1316] w-8 h-8" />
@@ -72,10 +95,23 @@ function BattleshipContent() {
       );
   }
 
+  if (!user) return null;
+
+  if (lobbyDeleted) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center font-bold text-gray-400 bg-[#F8FAFC]">
+          <span className="mb-4 text-xl text-[#1A1F26] uppercase">{t.gameFinished}</span>
+          <button onClick={() => router.push('/play')} className="px-6 py-3 bg-[#1A1F26] text-white rounded-xl font-bold uppercase tracking-widest hover:bg-[#9e1316] transition-colors shadow-lg">
+              {t.toMenu}
+          </button>
+      </div>
+    );
+  }
+
   if (!gameState) {
       return (
         <div className="min-h-screen flex items-center justify-center font-bold text-gray-400 uppercase tracking-widest">
-            Лобби не найдено
+            {t.lobbyNotFound}
         </div>
       );
   }

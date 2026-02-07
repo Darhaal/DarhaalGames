@@ -9,10 +9,9 @@ import {
 import { useRouter } from 'next/navigation';
 import { FlagerState, FlagerNotification } from '@/types/flager';
 import { COUNTRIES, COUNTRY_CODES } from '@/data/flager/countries';
-
-// ... (UI_TEXT, RulesModal, NotificationToast, FlagRevealCanvas, Podium components remain the same) ...
-// Я опускаю вспомогательные компоненты для краткости, они остаются без изменений
-// Фокусируемся на основном компоненте FlagerGame
+import GameHeader from './GameHeader';
+import GameRulesModal from './GameRulesModal';
+import { GAME_RULES } from '@/constants/rules';
 
 const UI_TEXT = {
   ru: {
@@ -50,21 +49,7 @@ const UI_TEXT = {
     pixelMatch: 'PIXEL MATCH',
     noData: 'Введите любую страну',
     leaveGame: 'Выйти',
-    rulesTitle: 'Правила игры',
-    guideTitle: 'Справка',
-    close: 'Закрыть',
-    rules: {
-       objectiveTitle: 'Цель игры',
-       objectiveText: 'Угадайте скрытый флаг государства, используя метод частичного открытия (Pixel Match).',
-       mechanicsTitle: 'Как играть',
-       step1: 'Вводите названия ЛЮБЫХ стран.',
-       step2: 'Система сравнит их флаги с загаданным.',
-       step3: 'Если цвета совпадают в тех же местах — эти части флага откроются.',
-       scoringTitle: 'Награда',
-       scoringText: 'Вы начинаете с 1000 очков. Каждая ошибка (-50) и каждая секунда (-10) уменьшают итоговый счет.',
-       tipsTitle: 'Совет',
-       tipsText: 'Начинайте с флагов, где много разных цветов (например, ЮАР или Сейшелы), чтобы быстрее найти совпадения.'
-    }
+    close: 'Закрыть'
   },
   en: {
     title: 'FLAGGER',
@@ -101,21 +86,7 @@ const UI_TEXT = {
     pixelMatch: 'PIXEL MATCH',
     noData: 'Type any country',
     leaveGame: 'Leave',
-    rulesTitle: 'Game Rules',
-    guideTitle: 'Guide',
-    close: 'Close',
-    rules: {
-       objectiveTitle: 'Goal',
-       objectiveText: 'Guess the hidden country flag using the pixel overlay matching method.',
-       mechanicsTitle: 'How to Play',
-       step1: 'Enter the name of ANY country.',
-       step2: 'The system compares its flag with the target.',
-       step3: 'Matching pixels (color & position) will be revealed on screen.',
-       scoringTitle: 'Scoring',
-       scoringText: 'Start with 1000 pts. Each error (-50) and each second (-10) reduces the score.',
-       tipsTitle: 'Pro Tip',
-       tipsText: 'Start with flags that have many distinct colors (like South Africa or Seychelles) to reveal pixels faster.'
-    }
+    close: 'Close'
   }
 };
 
@@ -128,90 +99,6 @@ interface FlagerGameProps {
   leaveGame: () => void;
   lang: 'ru' | 'en';
 }
-
-const RulesModal = ({ onClose, t }: { onClose: () => void, t: any }) => (
-    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
-        <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 border-4 border-[#1A1F26] flex flex-col max-h-[90vh]">
-            <div className="p-6 bg-[#1A1F26] text-white flex justify-between items-center relative overflow-hidden shrink-0">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
-                <h2 className="text-xl font-black uppercase flex items-center gap-3 relative z-10 tracking-wider">
-                    <Book className="w-6 h-6 text-[#9e1316]" /> {t.rulesTitle}
-                </h2>
-                <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors relative z-10">
-                    <X className="w-5 h-5 text-white/60 hover:text-white" />
-                </button>
-            </div>
-            <div className="p-6 space-y-6 overflow-y-auto custom-scrollbar bg-[#F8FAFC]">
-                <section className="flex gap-4">
-                    <div className="shrink-0 mt-1">
-                        <div className="w-10 h-10 rounded-2xl bg-[#9e1316]/10 flex items-center justify-center text-[#9e1316]">
-                            <Target className="w-5 h-5" />
-                        </div>
-                    </div>
-                    <div>
-                        <h3 className="font-black text-[#1A1F26] uppercase text-xs tracking-widest mb-2">{t.rules.objectiveTitle}</h3>
-                        <p className="text-sm font-bold text-gray-600 leading-relaxed bg-white p-3 rounded-xl border border-[#E6E1DC] shadow-sm">
-                            {t.rules.objectiveText}
-                        </p>
-                    </div>
-                </section>
-                <section className="flex gap-4">
-                    <div className="shrink-0 mt-1">
-                        <div className="w-10 h-10 rounded-2xl bg-blue-50 flex items-center justify-center text-blue-600">
-                            <Keyboard className="w-5 h-5" />
-                        </div>
-                    </div>
-                    <div>
-                        <h3 className="font-black text-[#1A1F26] uppercase text-xs tracking-widest mb-2">{t.rules.mechanicsTitle}</h3>
-                        <ul className="space-y-2">
-                            <li className="flex gap-3 text-xs sm:text-sm font-semibold text-gray-600 items-start">
-                                <span className="bg-[#1A1F26] text-white w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">1</span>
-                                <span>{t.rules.step1}</span>
-                            </li>
-                            <li className="flex gap-3 text-xs sm:text-sm font-semibold text-gray-600 items-start">
-                                <span className="bg-[#1A1F26] text-white w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">2</span>
-                                <span>{t.rules.step2}</span>
-                            </li>
-                            <li className="flex gap-3 text-xs sm:text-sm font-semibold text-gray-600 items-start">
-                                <span className="bg-[#1A1F26] text-white w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">3</span>
-                                <span>{t.rules.step3}</span>
-                            </li>
-                        </ul>
-                    </div>
-                </section>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <section className="bg-yellow-50 p-4 rounded-2xl border border-yellow-100 relative overflow-hidden">
-                        <div className="absolute -right-4 -bottom-4 opacity-10">
-                            <Trophy className="w-24 h-24 text-yellow-600" />
-                        </div>
-                        <h3 className="font-black text-yellow-800 uppercase text-[10px] tracking-widest mb-1 flex items-center gap-2">
-                            <Trophy className="w-3 h-3" /> {t.rules.scoringTitle}
-                        </h3>
-                        <p className="text-xs font-bold text-yellow-900/80 leading-snug relative z-10">
-                            {t.rules.scoringText}
-                        </p>
-                    </section>
-                    <section className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 relative overflow-hidden">
-                        <div className="absolute -right-4 -bottom-4 opacity-10">
-                            <Lightbulb className="w-24 h-24 text-emerald-600" />
-                        </div>
-                        <h3 className="font-black text-emerald-800 uppercase text-[10px] tracking-widest mb-1 flex items-center gap-2">
-                            <Lightbulb className="w-3 h-3" /> {t.rules.tipsTitle}
-                        </h3>
-                        <p className="text-xs font-bold text-emerald-900/80 leading-snug relative z-10">
-                            {t.rules.tipsText}
-                        </p>
-                    </section>
-                </div>
-            </div>
-            <div className="p-4 bg-gray-50 border-t border-[#E6E1DC] flex justify-center shrink-0">
-                <button onClick={onClose} className="w-full bg-[#1A1F26] text-white py-3 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-[#9e1316] transition-colors shadow-lg">
-                    {t.accepted}
-                </button>
-            </div>
-        </div>
-    </div>
-);
 
 const NotificationToast = ({ notifications, lang }: { notifications: FlagerNotification[], lang: 'ru' | 'en' }) => {
     const [visibleNote, setVisibleNote] = useState<FlagerNotification | null>(null);
@@ -335,7 +222,7 @@ const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode:
                     const finalImageData = ctx.createImageData(WIDTH, HEIGHT);
                     for (let i = 0; i < mask.length; i++) {
                         const ptr = i * 4;
-                        if (mask[i] === 1) {
+                        if (mask[i]) {
                             finalImageData.data[ptr] = targetData.data[ptr];
                             finalImageData.data[ptr+1] = targetData.data[ptr+1];
                             finalImageData.data[ptr+2] = targetData.data[ptr+2];
@@ -366,7 +253,7 @@ const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode:
        <div className="absolute inset-0 shadow-[inset_0_0_50px_rgba(0,0,0,0.5)] z-30 pointer-events-none" />
 
        {!isRoundDone && (
-         <div className="absolute top-3 right-3 bg-black/60 text-emerald-400 text-[10px] font-mono px-2 py-1 rounded backdrop-blur-sm z-40 border border-emerald-500/20 animate-pulse">
+         <div className="absolute top-3 right-3 bg-black/60 text-[#9e1316] text-[10px] font-mono px-2 py-1 rounded backdrop-blur-sm z-40 border border-[#9e1316]/40 animate-pulse">
             {t.pixelMatch}
          </div>
        )}
@@ -382,12 +269,12 @@ const Podium = ({ players, currentUserId }: { players: any[], currentUserId: str
         if (!p) return null;
         const isMe = p.id === currentUserId;
         const height = place === 1 ? 'h-32 md:h-48' : place === 2 ? 'h-24 md:h-36' : 'h-16 md:h-24';
-        const color = place === 1 ? 'bg-yellow-400' : place === 2 ? 'bg-gray-300' : 'bg-amber-600';
+        const color = place === 1 ? 'bg-[#FBBF24]' : place === 2 ? 'bg-gray-300' : 'bg-amber-700';
 
         return (
             <div className={`flex flex-col items-center justify-end animate-in slide-in-from-bottom-20 fade-in duration-1000 ${delay}`}>
                 <div className="relative mb-2">
-                    {place === 1 && <Crown className="w-6 h-6 md:w-8 md:h-8 text-yellow-400 absolute -top-8 left-1/2 -translate-x-1/2 animate-bounce" />}
+                    {place === 1 && <Crown className="w-6 h-6 md:w-8 md:h-8 text-[#FBBF24] absolute -top-8 left-1/2 -translate-x-1/2 animate-bounce" />}
                     <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full border-4 ${isMe ? 'border-[#9e1316]' : 'border-white'} shadow-lg overflow-hidden bg-gray-200`}>
                          <img src={p.avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.id}`} className="w-full h-full object-cover" />
                     </div>
@@ -445,28 +332,23 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
       const timer = setInterval(() => {
           const now = Date.now();
           const start = gameState.roundStartTime || now;
-          // Считаем время с учетом задержки. Если start в будущем, elapsed будет отрицательным
           const secondsPassed = Math.floor((now - start) / 1000);
 
           setElapsed(secondsPassed);
 
-          // TIMEOUT CHECK - Только если раунд действительно начался (время >= 0)
           if (secondsPassed >= roundDuration) {
               if (!isRoundDone) {
                  handleTimeout();
               }
               clearInterval(timer);
           }
-      }, 200); // Обновляем чаще для плавной реакции на начало
+      }, 200);
 
       return () => clearInterval(timer);
   }, [isPlaying, isRoundEnd, isFinished, isRoundDone, gameState.roundStartTime, handleTimeout, roundDuration]);
 
-  // Не показываем время больше лимита (если задержка)
   const timeLeft = Math.max(0, roundDuration - Math.max(0, elapsed));
   const isLowTime = timeLeft <= 10;
-
-  // Фаза обратного отсчета
   const isCountingDown = elapsed < 0;
   const countdownValue = Math.abs(elapsed);
 
@@ -527,7 +409,6 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
   const isRoundFailed = isRoundDone && (isAttemptsFailed || isTimeFailed);
 
   if (isFinished) {
-      // (Код экрана завершения без изменений)
       return (
         <div className="fixed inset-0 z-[200] bg-[#F8FAFC] flex flex-col font-sans">
             <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
@@ -596,11 +477,16 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
       );
   }
 
-  // GAME SCREEN
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans relative overflow-hidden selection:bg-[#9e1316] selection:text-white">
        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
-       {showRules && <RulesModal onClose={() => setShowRules(false)} t={t} />}
+
+       <GameRulesModal
+          isOpen={showRules}
+          onClose={() => setShowRules(false)}
+          rules={GAME_RULES[lang as 'ru' | 'en'].flager}
+          themeColor="text-[#9e1316]"
+       />
        <NotificationToast notifications={gameState.notifications || []} lang={lang} />
 
        {/* COUNTDOWN OVERLAY */}
@@ -624,35 +510,16 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
            />
        </div>
 
-       <header className="w-full max-w-6xl mx-auto p-4 flex justify-between items-center z-20 relative pt-8">
-          <div className="flex items-center gap-4">
-              <div className="bg-white p-2 rounded-xl border border-[#E6E1DC] shadow-sm">
-                  <Flag className="w-6 h-6 text-[#9e1316]" />
-              </div>
-              <div className="flex flex-col">
-                  <h1 className="font-black text-lg uppercase tracking-tight leading-none">{t.title} <span className="text-[#9e1316]">{t.pro}</span></h1>
-                  <span className="text-[10px] font-bold text-[#8A9099] uppercase tracking-wider">
-                      {t.round} {gameState.currentRoundIndex + 1} {t.of} {gameState.targetChain.length}
-                  </span>
-              </div>
-          </div>
-
-          <div className="flex items-center gap-2 md:gap-6">
-              <button onClick={() => setShowRules(true)} className="p-3 bg-white border border-[#E6E1DC] rounded-xl text-[#8A9099] hover:text-[#9e1316] hover:border-[#9e1316] transition-colors" title={t.rulesTitle}>
-                  <HelpCircle className="w-5 h-5" />
-              </button>
-              <div className="flex flex-col items-end">
-                  <span className="text-[10px] font-bold text-[#8A9099] uppercase tracking-wider hidden md:block">{t.time}</span>
-                  <div className={`font-mono font-black text-xl tabular-nums flex items-center gap-2 transition-colors ${isLowTime ? 'text-red-500 animate-pulse' : 'text-[#1A1F26]'}`}>
-                      <Clock className="w-4 h-4" />
-                      {String(Math.floor(timeLeft / 60)).padStart(2,'0')}:{String(timeLeft % 60).padStart(2,'0')}
-                  </div>
-              </div>
-              <button onClick={handleEmergencyExit} className="p-3 bg-white border border-[#E6E1DC] rounded-xl text-[#8A9099] hover:text-[#9e1316] hover:border-[#9e1316] transition-colors" title={t.leaveGame}>
-                  <LogOut className="w-5 h-5" />
-              </button>
-          </div>
-       </header>
+       <GameHeader
+            title="Flagger"
+            icon={Flag}
+            timeLeft={timeLeft}
+            showTime={true}
+            onLeave={handleEmergencyExit}
+            onShowRules={() => setShowRules(true)}
+            lang={lang}
+            accentColor="text-[#9e1316]"
+       />
 
        <main className="flex-1 w-full max-w-6xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-8 z-10 pb-24 lg:pb-12">
 

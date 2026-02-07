@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Mail, Lock, User, Chrome, Ghost, Globe, Loader2, AlertCircle, ArrowRight, Eye, EyeOff, Gamepad2 } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation'; // Добавил импорты
+import { Mail, Lock, User, Chrome, Ghost, Globe, Loader2, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 
 type Lang = 'ru' | 'en';
@@ -42,7 +43,11 @@ const translations = {
 };
 
 export default function AuthForm() {
-  const [lang, setLang] = useState<Lang>('en'); // Default set to English
+  const router = useRouter(); // Инициализация роутера
+  const searchParams = useSearchParams(); // Инициализация параметров
+  const returnUrl = searchParams.get('returnUrl');
+
+  const [lang, setLang] = useState<Lang>('en');
   const [isSignUp, setIsSignUp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -70,6 +75,14 @@ export default function AuthForm() {
       return 'http://localhost:3000';
     }
     return 'https://online-games-phi.vercel.app';
+  };
+
+  const handleSuccessLogin = () => {
+      if (returnUrl) {
+          router.push(returnUrl);
+      } else {
+          window.location.reload();
+      }
   };
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -106,6 +119,8 @@ export default function AuthForm() {
         const finalEmail = loginEmail || username;
         const { error } = await supabase.auth.signInWithPassword({ email: finalEmail, password });
         if (error) throw error;
+
+        handleSuccessLogin();
       }
     } catch (error: any) {
       setErrorMsg(error.message);
@@ -126,8 +141,23 @@ export default function AuthForm() {
   const handleGuestLogin = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signInAnonymously();
+      const { data, error } = await supabase.auth.signInAnonymously();
       if (error) throw error;
+
+      // Генерируем случайный аватар и имя для гостя
+      if (data.user) {
+          const randomSeed = Math.random().toString(36).substring(7);
+          const randomAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${randomSeed}&backgroundColor=transparent`;
+
+          await supabase.auth.updateUser({
+              data: {
+                  username: `Player`,
+                  avatar_url: randomAvatar
+              }
+          });
+      }
+
+      handleSuccessLogin();
     } catch (e) { setErrorMsg("Guest disabled"); setLoading(false); }
   };
 

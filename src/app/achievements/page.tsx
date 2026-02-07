@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import {
   ArrowLeft, Calendar, Trophy, Skull,
   Gamepad2, Medal, Clock, TrendingUp, Loader2, User, Star,
-  Flag, Bomb
+  Flag, Bomb, Zap, Fingerprint
 } from 'lucide-react';
 
 type Lang = 'ru' | 'en';
@@ -38,6 +38,7 @@ type UserStats = {
         flager?: GameStatsData;
         battleship?: BaseStats; // Всегда плоский
         coup?: BaseStats;       // Всегда плоский
+        spyfall?: BaseStats;    // Всегда плоский
     }
 };
 
@@ -55,7 +56,10 @@ function AchievementsContent() {
     const fetchData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-          router.push('/');
+          // Сохраняем текущий путь
+          const currentPath = window.location.pathname + window.location.search;
+          // Перекидываем на главную, добавляя returnUrl
+          router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
           return;
       }
       setUser(user);
@@ -76,7 +80,8 @@ function AchievementsContent() {
                   minesweeper: { wins: 0, lost: 0, time: 0 },
                   flager: { wins: 0, lost: 0, time: 0 },
                   battleship: { wins: 0, lost: 0, time: 0 },
-                  coup: { wins: 0, lost: 0, time: 0 }
+                  coup: { wins: 0, lost: 0, time: 0 },
+                  spyfall: { wins: 0, lost: 0, time: 0 }
               }
           });
       }
@@ -101,6 +106,7 @@ function AchievementsContent() {
       guest: 'Гость',
       guestDesc: 'Статистика не сохраняется',
       noStats: 'Нет данных',
+      footer: '© 2026 Darhaal Games Inc.',
       modes: {
           single: 'Одиночный',
           multi: 'Мультиплеер'
@@ -109,7 +115,8 @@ function AchievementsContent() {
           minesweeper: 'Сапер',
           flager: 'Флагер',
           battleship: 'Морской Бой',
-          coup: 'Переворот'
+          coup: 'Переворот',
+          spyfall: 'Шпион'
       },
       extra: {
           minesweeper: 'Мин найдено',
@@ -131,6 +138,7 @@ function AchievementsContent() {
       guest: 'Guest',
       guestDesc: 'Stats not saved',
       noStats: 'No data',
+      footer: '© 2026 Darhaal Games Inc.',
       modes: {
           single: 'Solo',
           multi: 'Multiplayer'
@@ -139,7 +147,8 @@ function AchievementsContent() {
           minesweeper: 'Minesweeper',
           flager: 'Flager',
           battleship: 'Battleship',
-          coup: 'Coup'
+          coup: 'Coup',
+          spyfall: 'Spyfall'
       },
       extra: {
           minesweeper: 'Mines found',
@@ -156,7 +165,6 @@ function AchievementsContent() {
 
   // --- Helpers for Aggregation ---
 
-  // Функция для безопасного извлечения данных (суммирует single+multi или берет плоские данные)
   const getAggregatedStats = (gameData: any): BaseStats => {
       if (!gameData) return { wins: 0, lost: 0, time: 0 };
 
@@ -179,7 +187,6 @@ function AchievementsContent() {
       };
   };
 
-  // Подсчет общих значений для верхних карточек
   let totalWins = 0;
   let totalLost = 0;
   let totalTime = 0;
@@ -196,7 +203,6 @@ function AchievementsContent() {
   const globalWinRate = totalWins + totalLost > 0 ? Math.round((totalWins / (totalWins + totalLost)) * 100) : 0;
   const hoursPlayed = Math.floor(totalTime / 60);
 
-  // Компонент маленькой карточки общей статистики
   const StatCard = ({ label, value, icon: Icon, color }: any) => (
       <div className="bg-white p-5 rounded-3xl border border-[#E6E1DC] shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow group">
           <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${color} text-white shadow-md group-hover:scale-110 transition-transform`}>
@@ -209,13 +215,12 @@ function AchievementsContent() {
       </div>
   );
 
-  // Компонент карточки конкретной игры
   const GameStatCard = ({ title, data, modeLabel, gameKey }: { title: string, data: BaseStats, modeLabel?: string, gameKey: string }) => {
       const total = data.wins + data.lost;
       const wr = total > 0 ? Math.round((data.wins / total) * 100) : 0;
 
       const extraLabel = t.extra[gameKey as keyof typeof t.extra];
-      const ExtraIcon = gameKey === 'minesweeper' ? Bomb : Flag;
+      const ExtraIcon = gameKey === 'minesweeper' ? Bomb : (gameKey === 'flager' ? Flag : null);
 
       return (
         <div className="bg-white rounded-[32px] p-6 border border-[#E6E1DC] shadow-lg hover:shadow-xl transition-all group relative overflow-hidden flex flex-col justify-between">
@@ -223,7 +228,10 @@ function AchievementsContent() {
 
             <div className="flex justify-between items-start mb-6 relative z-10">
                 <div>
-                    <h3 className="text-xl font-black text-[#1A1F26]">{title}</h3>
+                    <h3 className="text-xl font-black text-[#1A1F26] flex items-center gap-2">
+                        {gameKey === 'spyfall' && <Fingerprint className="w-5 h-5 text-[#9e1316]"/>}
+                        {title}
+                    </h3>
                     {modeLabel && (
                         <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded tracking-wider mt-1 inline-block ${modeLabel === t.modes.single ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
                             {modeLabel}
@@ -253,8 +261,7 @@ function AchievementsContent() {
                     </div>
                 </div>
 
-                {/* Extra Stats Row */}
-                {extraLabel && (
+                {extraLabel && ExtraIcon && (
                     <div>
                         <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{extraLabel}</div>
                         <div className="text-xl font-black text-[#1A1F26] flex items-center gap-1">
@@ -284,7 +291,7 @@ function AchievementsContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] font-sans text-[#1A1F26] overflow-x-hidden selection:bg-[#9e1316] selection:text-white">
+    <div className="min-h-screen bg-[#F8FAFC] font-sans text-[#1A1F26] overflow-x-hidden selection:bg-[#9e1316] selection:text-white flex flex-col">
       <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
 
       {/* HEADER: STICKY */}
@@ -303,7 +310,7 @@ function AchievementsContent() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8 pb-20 relative z-10">
+      <main className="max-w-5xl mx-auto px-6 py-8 pb-20 relative z-10 flex-1">
           {/* Header Profile */}
           <div className="flex flex-col md:flex-row items-center gap-8 mb-12 animate-in slide-in-from-bottom-8 duration-500">
               <div className="w-32 h-32 md:w-40 md:h-40 rounded-full border-4 border-white shadow-2xl overflow-hidden bg-[#F5F5F0] relative group ring-4 ring-[#E6E1DC]/50">
@@ -338,7 +345,7 @@ function AchievementsContent() {
 
           {/* Global Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12 animate-in slide-in-from-bottom-10 duration-700 delay-100">
-              <StatCard label={t.totalGames} value={totalWins + totalLost} icon={Gamepad2} color="bg-[#1A1F26]" />
+              <StatCard label={t.totalGames} value={totalWins + totalLost} icon={Gamepad2} color="bg-[#9e1316]" />
               <StatCard label={t.winRate} value={`${globalWinRate}%`} icon={TrendingUp} color="bg-emerald-600" />
               <StatCard label={t.playTime} value={`${hoursPlayed}h`} icon={Clock} color="bg-blue-600" />
               <StatCard label={t.wins} value={totalWins} icon={Trophy} color="bg-yellow-500" />
@@ -350,7 +357,7 @@ function AchievementsContent() {
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-12 duration-700 delay-200">
-              {['minesweeper', 'flager', 'battleship', 'coup'].map((gameKey) => {
+              {['minesweeper', 'flager', 'battleship', 'coup', 'spyfall'].map((gameKey) => {
                   const data: any = stats?.details?.[gameKey as keyof typeof stats.details];
                   const gameName = t.gamesNames[gameKey as keyof typeof t.gamesNames];
 
@@ -376,11 +383,17 @@ function AchievementsContent() {
                       );
                   }
 
-                  // Стандартный (плоский) вид для Coup/Battleship или legacy данных
+                  // Стандартный (плоский) вид для Coup/Battleship/Spyfall
                   return <GameStatCard key={gameKey} title={gameName} data={data} gameKey={gameKey} />;
               })}
           </div>
       </main>
+
+      <footer className="w-full p-8 text-center z-10 mt-auto opacity-40 hover:opacity-100 transition-opacity">
+        <p className="text-[#1A1F26] text-[10px] font-black tracking-[0.3em] cursor-default flex items-center justify-center gap-2">
+            <Zap className="w-3 h-3 text-[#9e1316]" /> {t.footer}
+        </p>
+      </footer>
     </div>
   );
 }

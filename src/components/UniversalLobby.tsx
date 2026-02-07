@@ -1,7 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { LogOut, Crown, Copy, Check, Users, ScrollText, Ship, Bomb, Fingerprint, ShieldAlert, Skull, UserPlus, UserMinus, User, Play, Flag } from 'lucide-react';
+import {
+  LogOut, Crown, Copy, Check, Users, ScrollText, Ship,
+  Bomb, Fingerprint, ShieldAlert, Skull, User, Play, Flag,
+  Wifi, WifiOff, XCircle, AlertCircle, Loader2
+} from 'lucide-react';
+import { usePresenceHeartbeat } from '@/hooks/usePresenceHeartbeat';
+import { supabase } from '@/lib/supabase';
 
 export interface LobbyPlayer {
   id: string;
@@ -35,9 +41,8 @@ const GAME_ICONS: Record<string, any> = {
   secret_hitler: Skull,
 };
 
-const Toast = ({ msg, type }: { msg: string, type: 'join' | 'leave' }) => (
-    <div className={`flex items-center gap-2 px-4 py-3 rounded-xl shadow-xl border text-xs font-bold uppercase tracking-wider animate-in slide-in-from-top-4 fade-in duration-300 z-[100] ${type === 'join' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
-        {type === 'join' ? <UserPlus className="w-4 h-4" /> : <UserMinus className="w-4 h-4" />}
+const Toast = ({ msg, type }: { msg: string, type: 'join' | 'leave' | 'info' }) => (
+    <div className={`flex items-center gap-2 px-4 py-3 rounded-xl shadow-xl border text-xs font-bold uppercase tracking-wider animate-in slide-in-from-top-4 fade-in duration-300 z-[100] ${type === 'join' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : type === 'leave' ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>
         {msg}
     </div>
 );
@@ -55,8 +60,14 @@ export default function UniversalLobby({
   lang
 }: UniversalLobbyProps) {
   const [copied, setCopied] = useState(false);
-  const [notifications, setNotifications] = useState<{ id: number; msg: string; type: 'join' | 'leave' }[]>([]);
+  const [notifications, setNotifications] = useState<{ id: number; msg: string; type: 'join' | 'leave' | 'info' }[]>([]);
   const prevPlayersRef = useRef<LobbyPlayer[]>(players);
+
+  // Таймеры для отслеживания оффлайн игроков перед авто-киком (id -> timestamp удаления)
+  const [kickTimers, setKickTimers] = useState<Record<string, number>>({});
+
+  // Подключение Presence
+  const { onlineUserIds, isSynced } = usePresenceHeartbeat(roomCode, currentUserId);
 
   const isHost = players.find(p => p.id === currentUserId)?.isHost;
   const GameIcon = GAME_ICONS[gameType] || Users;
@@ -72,7 +83,12 @@ export default function UniversalLobby({
       you: 'Вы',
       playersTitle: 'Игроки',
       joined: 'присоединился',
-      left: 'вышел'
+      left: 'вышел',
+      offline: 'Не в сети',
+      kick: 'Исключить',
+      kicked: 'Игрок исключен',
+      autoKick: 'Кик через',
+      sec: 'с'
     },
     en: {
       waiting: 'Waiting for players...',
@@ -84,10 +100,16 @@ export default function UniversalLobby({
       you: 'You',
       playersTitle: 'Players',
       joined: 'joined',
-      left: 'left'
+      left: 'left',
+      offline: 'Offline',
+      kick: 'Kick',
+      kicked: 'Player kicked',
+      autoKick: 'Kick in',
+      sec: 's'
     }
   }[lang];
 
+  // Уведомления о входе/выходе (визуальные)
   useEffect(() => {
       const prev = prevPlayersRef.current;
       const current = players;
@@ -107,16 +129,129 @@ export default function UniversalLobby({
       prevPlayersRef.current = current;
   }, [players, t]);
 
-  const addNotification = (msg: string, type: 'join' | 'leave') => {
+  // --- АВТО-КИК СИСТЕМА (Работает только у Хоста) ---
+  useEffect(() => {
+    // Работаем только если мы хост и синхронизация Presence завершена
+    if (!isHost || !isSynced) return;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const newTimers = { ...kickTimers };
+      let changed = false;
+
+      players.forEach(p => {
+        if (p.id === currentUserId) return; // Себя не кикаем
+
+        // Игрок оффлайн?
+        const isOffline = !onlineUserIds.includes(p.id);
+
+        if (isOffline) {
+          if (!newTimers[p.id]) {
+            // Начало таймера (10 секунд на переподключение)
+            newTimers[p.id] = now + 10000;
+            changed = true;
+          } else if (now > newTimers[p.id]) {
+            // Время вышло - кикаем
+            handleKickPlayer(p.id);
+            delete newTimers[p.id]; // Удаляем таймер, чтобы не спамить запросами
+            changed = true;
+          }
+        } else {
+          // Игрок онлайн - сбрасываем таймер, если он был
+          if (newTimers[p.id]) {
+            delete newTimers[p.id];
+            changed = true;
+          }
+        }
+      });
+
+      // Очистка таймеров для игроков, которых уже нет в списке
+      Object.keys(newTimers).forEach(id => {
+        if (!players.find(p => p.id === id)) {
+          delete newTimers[id];
+          changed = true;
+        }
+      });
+
+      if (changed) setKickTimers(newTimers);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isHost, isSynced, players, onlineUserIds, kickTimers]);
+
+  const addNotification = (msg: string, type: 'join' | 'leave' | 'info') => {
       const id = Date.now();
       setNotifications(prev => [...prev, { id, msg, type }]);
       setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(roomCode);
-    setCopied(true);
+    // Fallback для копирования
+    const textArea = document.createElement("textarea");
+    textArea.value = roomCode;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      setCopied(true);
+    } catch (err) {
+      console.error('Copy failed', err);
+    }
+    document.body.removeChild(textArea);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleKickPlayer = async (targetId: string) => {
+    if (!isHost) return;
+
+    try {
+      // 1. Получаем СВЕЖЕЕ состояние из БД (критично для избежания рейсов "удаляет-возвращает")
+      const { data, error } = await supabase
+        .from('lobbies')
+        .select('game_state')
+        .eq('code', roomCode)
+        .single();
+
+      if (error || !data) return;
+
+      const currentState = data.game_state;
+      let newPlayers: any = currentState.players;
+      let playersCount = 0;
+
+      // 2. Удаляем игрока в зависимости от структуры данных
+      if (Array.isArray(newPlayers)) {
+        // Массив (Spyfall, Coup, Flager)
+        newPlayers = newPlayers.filter((p: any) => p.id !== targetId);
+        playersCount = newPlayers.length;
+      } else if (typeof newPlayers === 'object') {
+        // Объект (Battleship, Minesweeper)
+        const updatedPlayers = { ...newPlayers };
+        delete updatedPlayers[targetId];
+        newPlayers = updatedPlayers;
+        playersCount = Object.keys(newPlayers).length;
+      }
+
+      // 3. Если игроков не осталось - удаляем лобби, иначе обновляем
+      if (playersCount === 0) {
+          await supabase.from('lobbies').delete().eq('code', roomCode);
+          onLeave(); // Выходим сами, так как лобби уничтожено
+      } else {
+          await supabase
+            .from('lobbies')
+            .update({
+              game_state: { ...currentState, players: newPlayers, version: (currentState.version || 0) + 1 }
+            })
+            .eq('code', roomCode);
+
+          // Локальное уведомление только если кикнули вручную (не авто)
+          if (!kickTimers[targetId]) {
+             addNotification(t.kicked, 'info');
+          }
+      }
+
+    } catch (e) {
+      console.error("Kick failed", e);
+    }
   };
 
   return (
@@ -142,8 +277,10 @@ export default function UniversalLobby({
                </div>
                {roomName}
             </h1>
-            <div className="text-[10px] font-bold text-[#9e1316] uppercase tracking-[0.2em] mt-2 bg-[#9e1316]/5 px-3 py-1 rounded-full border border-[#9e1316]/10 animate-pulse">
-                {t.waiting}
+            <div className="flex items-center gap-2 mt-2">
+                <div className="text-[10px] font-bold text-[#9e1316] uppercase tracking-[0.2em] bg-[#9e1316]/5 px-3 py-1 rounded-full border border-[#9e1316]/10 animate-pulse">
+                    {t.waiting}
+                </div>
             </div>
         </div>
 
@@ -151,7 +288,7 @@ export default function UniversalLobby({
       </header>
 
       <main className="flex-1 w-full max-w-5xl mx-auto p-4 z-10 flex flex-col lg:flex-row gap-8 items-start justify-center pt-8 lg:pt-16">
-        <div className="w-full lg:w-2/3 bg-white border border-[#E6E1DC] rounded-[32px] p-8 shadow-xl shadow-[#1A1F26]/5 relative overflow-hidden">
+        <div className="w-full lg:w-2/3 bg-white border border-[#E6E1DC] rounded-[32px] p-8 shadow-xl shadow-[#1A1F26]/5 relative overflow-hidden transition-all">
           <div className="flex justify-between items-center mb-8 border-b border-[#F5F5F0] pb-4">
               <h2 className="text-xl font-black uppercase tracking-wide flex items-center gap-2 text-[#1A1F26]">
                   <Users className="w-5 h-5 text-[#9e1316]" />
@@ -160,27 +297,59 @@ export default function UniversalLobby({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {players.map(p => (
-              <div key={p.id} className="group relative bg-[#F8FAFC] p-4 rounded-2xl border border-[#E6E1DC] flex items-center gap-4 transition-all hover:border-[#9e1316]/30 hover:shadow-md hover:-translate-y-0.5">
-                <div className="relative">
-                    <div className="w-14 h-14 rounded-full bg-white border-2 border-white shadow-sm overflow-hidden bg-[#F5F5F0]">
-                         {p.avatarUrl ? <img src={p.avatarUrl} alt={p.name} className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-gray-400 m-auto mt-3" />}
-                    </div>
-                    {p.isHost && (
-                        <div className="absolute -top-1 -right-1 bg-[#9e1316] text-white p-1 rounded-full border-2 border-white shadow-sm z-10" title={t.host}>
-                            <Crown className="w-3 h-3" />
-                        </div>
-                    )}
-                </div>
+            {players.map(p => {
+              // Игрок онлайн, если он есть в Presence или если это я сам (пока синхронизация идет)
+              const isOnline = !isSynced || onlineUserIds.includes(p.id) || p.id === currentUserId;
+              const isMe = p.id === currentUserId;
 
-                <div className="flex flex-col overflow-hidden">
-                    <div className="font-black text-[#1A1F26] text-sm truncate">{p.name}</div>
-                    <div className="text-[10px] font-bold text-[#8A9099] uppercase tracking-wider">
-                        {p.id === currentUserId ? <span className="text-[#9e1316]">{t.you}</span> : (p.isHost ? t.host : 'Player')}
-                    </div>
+              // Время до кика (если таймер запущен)
+              const kickTime = kickTimers[p.id] ? Math.ceil((kickTimers[p.id] - Date.now()) / 1000) : null;
+
+              return (
+                <div key={p.id} className={`group relative p-4 rounded-2xl border flex items-center justify-between gap-4 transition-all ${isOnline ? 'bg-[#F8FAFC] border-[#E6E1DC] hover:border-[#9e1316]/30 hover:shadow-md' : 'bg-red-50 border-red-100 opacity-90'}`}>
+                  <div className="flex items-center gap-4 min-w-0">
+                      <div className="relative">
+                          <div className="w-14 h-14 rounded-full bg-white border-2 border-white shadow-sm overflow-hidden bg-[#F5F5F0]">
+                              {p.avatarUrl ? <img src={p.avatarUrl} alt={p.name} className={`w-full h-full object-cover ${!isOnline ? 'grayscale' : ''}`} /> : <User className="w-8 h-8 text-gray-400 m-auto mt-3" />}
+                          </div>
+                          {p.isHost && (
+                              <div className="absolute -top-1 -right-1 bg-[#9e1316] text-white p-1 rounded-full border-2 border-white shadow-sm z-10" title={t.host}>
+                                  <Crown className="w-3 h-3" />
+                              </div>
+                          )}
+                          <div className={`absolute -bottom-1 -right-1 p-1 rounded-full border-2 border-white shadow-sm z-10 ${isOnline ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                              {isOnline ? <Wifi className="w-2.5 h-2.5 text-white" /> : <WifiOff className="w-2.5 h-2.5 text-white" />}
+                          </div>
+                      </div>
+
+                      <div className="flex flex-col overflow-hidden">
+                          <div className="font-black text-[#1A1F26] text-sm truncate">{p.name}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-[10px] font-bold text-[#8A9099] uppercase tracking-wider">
+                                {isMe ? <span className="text-[#9e1316]">{t.you}</span> : (p.isHost ? t.host : 'Player')}
+                            </div>
+                            {!isOnline && (
+                                <span className="text-[9px] font-bold text-red-500 uppercase tracking-wider flex items-center gap-1 animate-pulse">
+                                    {kickTime !== null && kickTime > 0 ? `${t.autoKick} ${kickTime}${t.sec}` : t.offline}
+                                </span>
+                            )}
+                          </div>
+                      </div>
+                  </div>
+
+                  {/* Кнопка кика: только для Хоста и только не для себя */}
+                  {isHost && !isMe && (
+                      <button
+                        onClick={() => handleKickPlayer(p.id)}
+                        className="p-2 bg-white rounded-xl border border-transparent hover:border-red-200 text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 shadow-sm"
+                        title={t.kick}
+                      >
+                          <XCircle className="w-5 h-5" />
+                      </button>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {Array.from({ length: Math.max(0, minPlayers - players.length) }).map((_, i) => (
                 <div key={`empty-${i}`} className="border-2 border-dashed border-[#E6E1DC] bg-transparent p-4 rounded-2xl flex items-center justify-center gap-4 opacity-50 min-h-[88px]">
                     <div className="w-14 h-14 rounded-full bg-[#E6E1DC]/30 animate-pulse" />

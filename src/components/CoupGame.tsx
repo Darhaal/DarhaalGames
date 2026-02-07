@@ -4,11 +4,14 @@ import React, { useState, useEffect } from 'react';
 import {
   Coins, Crown, Shield,
   LogOut, Book, HelpCircle,
-  Swords, Skull, RefreshCw, AlertTriangle, ThumbsUp, AlertOctagon, CheckCircle, Timer
+  Swords, Skull, RefreshCw, AlertTriangle, ThumbsUp, AlertOctagon, CheckCircle, Timer, ScrollText
 } from 'lucide-react';
 import { DICTIONARY } from '@/constants/coup';
 import { Role, Lang, GameState, Player } from '@/types/coup';
-import { GameCard, ActionBtn, RulesModal, GuideModal, LogPanel } from './CoupComponents';
+import { GameCard, ActionBtn, GuideModal, LogPanel } from './CoupComponents';
+import GameHeader from './GameHeader';
+import GameRulesModal from './GameRulesModal';
+import { GAME_RULES } from '@/constants/rules';
 
 interface CoupGameProps {
   gameState: GameState;
@@ -32,7 +35,6 @@ export default function CoupGame({
   const [selectedExchangeIndices, setSelectedExchangeIndices] = useState<number[]>([]);
   const [timeLeft, setTimeLeft] = useState(60);
 
-  // Локальное состояние, чтобы скрыть кнопки после нажатия "Пас"
   const [hasPassedLocal, setHasPassedLocal] = useState(false);
 
   const players = gameState.players || [];
@@ -57,8 +59,6 @@ export default function CoupGame({
   const isReactionPhase = phase === 'waiting_for_challenges' || phase === 'waiting_for_blocks' || phase === 'waiting_for_block_challenges';
   const isBlocker = gameState.currentAction?.blockedBy === userId;
 
-  // СБРОС СОСТОЯНИЯ ПАСА
-  // Сбрасываем, если изменилась фаза, действие, игрок, ИЛИ ХОД (turnIndex)
   useEffect(() => {
       setHasPassedLocal(false);
   }, [gameState.phase, gameState.currentAction?.type, gameState.currentAction?.player, gameState.turnIndex]);
@@ -70,16 +70,11 @@ export default function CoupGame({
               const remaining = Math.max(0, Math.ceil((gameState.turnDeadline - Date.now()) / 1000));
               setTimeLeft(remaining);
 
-              // Авто-действие по таймеру
               if (remaining === 0 && skipTurn) {
-                  // Если это моя ответственность (мой ход, или я должен сбросить карту)
                   if ((phase === 'choosing_action' && isMyTurn) || isLosing || isExchanging) {
                       skipTurn();
                   }
-                  // Если фаза реакции, и я еще не нажал пас - таймер сам вызовет pass() на сервере (через логику skipTurn в хуке)
-                  // Но мы можем форсировать это и с клиента для надежности
                   else if (isReactionPhase && !hasPassedLocal && !isActor && !isBlocker) {
-                      // В реакциях "пропуск хода" = "пас"
                       skipTurn();
                   }
               }
@@ -88,7 +83,6 @@ export default function CoupGame({
       return () => clearInterval(interval);
   }, [gameState.turnDeadline, gameState.status, phase, isMyTurn, isLosing, isExchanging, skipTurn, isReactionPhase, hasPassedLocal, isActor, isBlocker]);
 
-  // Логика кнопок
   const showChallengeBtn = !hasPassedLocal && isReactionPhase && !isActor && !isBlocker && (
       phase === 'waiting_for_challenges' ||
       phase === 'waiting_for_block_challenges' ||
@@ -99,7 +93,6 @@ export default function CoupGame({
       (isForeignAid || isActionWithBlockAndChallenge) &&
       (phase === 'waiting_for_challenges' || phase === 'waiting_for_blocks');
 
-  // Кнопка Пас доступна всем наблюдателям в фазе реакции, чтобы они могли сказать "я не возражаю"
   const showPassBtn = !hasPassedLocal && isReactionPhase && !isActor && !isBlocker;
 
   const handleAction = (action: string) => {
@@ -139,32 +132,26 @@ export default function CoupGame({
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans overflow-hidden relative">
       <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
-      {activeModal === 'rules' && <RulesModal onClose={() => setActiveModal(null)} lang={lang} />}
       {activeModal === 'guide' && <GuideModal onClose={() => setActiveModal(null)} lang={lang} />}
 
-      <header className="w-full max-w-6xl mx-auto p-4 flex justify-between items-center z-10 relative">
-          <button onClick={leaveGame} className="p-2 text-gray-400 hover:text-[#9e1316]"><LogOut className="w-5 h-5" /></button>
-          <div className="text-center">
-             <h1 className="font-black text-xl">COUP</h1>
-             <div className="text-[10px] font-bold text-[#9e1316] uppercase flex items-center justify-center gap-2">
-                 {isLosing ? t.loseInfluence : (gameState.status === 'playing' ? `Turn: ${currentPlayer?.name}` : 'End')}
-                 {gameState.status === 'playing' && (
-                     <span className={`flex items-center gap-1 ${timeLeft < 15 ? 'text-red-600 animate-pulse' : 'text-gray-500'}`}>
-                         <Timer className="w-3 h-3" /> {timeLeft}s
-                     </span>
-                 )}
-             </div>
-             {isHost && timeLeft === 0 && gameState.status === 'playing' && skipTurn && (
-                 <button onClick={skipTurn} className="mt-1 text-[9px] bg-red-100 text-red-600 px-2 py-0.5 rounded border border-red-200 uppercase font-bold hover:bg-red-200">
-                     Force Skip
-                 </button>
-             )}
-          </div>
-          <div className="flex gap-2">
-              <button onClick={() => setActiveModal('guide')} className="p-2 bg-white border rounded-xl shadow-sm"><Book className="w-5 h-5" /></button>
-              <button onClick={() => setActiveModal('rules')} className="p-2 bg-white border rounded-xl shadow-sm"><HelpCircle className="w-5 h-5" /></button>
-          </div>
-      </header>
+      <GameRulesModal
+        isOpen={activeModal === 'rules'}
+        onClose={() => setActiveModal(null)}
+        rules={GAME_RULES[lang].coup}
+        themeColor="text-orange-600"
+      />
+
+      <GameHeader
+        title="Coup"
+        icon={ScrollText}
+        timeLeft={timeLeft}
+        showTime={gameState.status === 'playing'}
+        onLeave={() => leaveGame()}
+        onShowRules={() => setActiveModal('rules')}
+        onShowGuide={() => setActiveModal('guide')}
+        lang={lang}
+        accentColor="text-orange-600"
+      />
 
       <LogPanel logs={gameState.logs} lang={lang} />
 
