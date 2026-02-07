@@ -1,107 +1,170 @@
-# 🎮 Darhaal Games (Online Gaming Platform)
+# 🎮 Darhaal Games  
+**Online Multiplayer Gaming Platform**
 
-![Version](https://img.shields.io/badge/version-1.4.5-blue.svg)
-![License](https://img.shields.io/badge/license-Non--Commercial-red.svg)
-![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
+![Version](https://img.shields.io/badge/version-1.5.4-blue.svg) ![License](https://img.shields.io/badge/license-Non--Commercial-red.svg) ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
 
-**Darhaal Games** is a production-ready SPA platform for real-time multiplayer browser games. The project combines classic game mechanics with a modern tech stack, featuring a robust lobby system, optimistic UI updates, and WebSocket-based state synchronization via Supabase.
+Darhaal Games is a production-ready SPA platform for real-time multiplayer browser games. The project combines classic game mechanics with a modern tech stack, featuring a robust lobby system, optimistic UI updates, and WebSocket-based state synchronization via Supabase.
 
-🔗 **Live Demo:** [online-games-phi.vercel.app](https://online-games-phi.vercel.app)
+🔗 **Live Demo:**  
+👉 https://online-games-phi.vercel.app
 
 ---
 
 ## ✨ Key Features
 
-* **Realtime Multiplayer:** Instant synchronization of game states, turns, and lobby events using Supabase Realtime channels.
-* **Universal Lobby System:** A unified architecture for room creation, matchmaking, and player management across different game modes.
-* **Authentication & Profiles:** Supports Guest Mode, Email/Password, and OAuth (Google). Persistent player stats and avatar customization.
-* **Responsive UX:** Fully adaptive interface optimized for both desktop (mouse/keyboard) and mobile (touch) experiences.
+### ⚡ Real-Time Multiplayer
+- Instant synchronization of game states, turns, timers, and lobby events  
+- Powered by **Supabase Realtime channels**
+
+### 🏛️ Universal Lobby System
+- Unified architecture for:
+  - Room creation  
+  - Matchmaking  
+  - Player management  
+- Shared logic across all game modes
+
+### 👤 Authentication & Profiles
+- Guest Mode  
+- Email / Password  
+- OAuth (Google)  
+- Persistent profiles, statistics, and avatar customization
+
+### 📱 Responsive UX
+- Fully adaptive interface  
+- Optimized for:
+  - Desktop (mouse & keyboard)  
+  - Mobile (touch)
 
 ---
 
 ## 🕹️ Game Modes
 
-### 1. 🚩 Flager (Geography Quiz)
-A unique take on trivia games featuring a **Pixel Match** mechanic.
-* **Core Mechanic:** Players guess the country while the flag is progressively revealed through "digital noise" on an HTML5 Canvas.
-* **Tech:** Custom image processing algorithm for pixel comparison, round-based synchronization.
+### 🚩 Flager — *Geography Quiz*
+A unique trivia experience built around visual deduction.
 
-### 2. 💣 Minesweeper (Co-op/Versus)
-Advanced implementation of the classic puzzle on an infinite-feeling board.
-* **Core Mechanic:** Custom viewport engine supporting zoom and pan (transform/scale logic).
-* **Features:** "First click safe" guarantee, chording mechanics, and conflict resolution for multiplayer interactions.
+**Core Mechanics**
+- Guess the country while the flag is gradually revealed through digital noise  
+- Pixel-by-pixel comparison unlocks correct fragments
 
-### 3. ⚓ Battleship (Strategy)
-Real-time tactical warfare.
-* **Core Mechanic:** Drag-and-drop ship placement with rotation support.
-* **Features:** Optimistic UI for instant shot feedback, server-authoritative turn timers, and fleet status tracking.
+**Technical Highlights**
+- Custom HTML5 Canvas image processing  
+- Round-based multiplayer synchronization
 
-### 4. 🎭 Coup (Social Deduction)
-A digital adaptation of the psychological card game involving bluffing and deduction.
-* **Core Mechanic:** Complex State Machine handling nested game phases (Action -> Challenge -> Block -> Resolution).
-* **Features:** Full log history, action validation, and AFK protection mechanisms.
+---
+
+### 💣 Minesweeper — *Co-op / Versus*
+A modern multiplayer interpretation of the classic puzzle.
+
+**Core Mechanics**
+- Infinite-feeling board with zoom and pan support  
+- Custom viewport engine using transform / scale logic
+
+**Features**
+- First-click safety guarantee  
+- Chording mechanics  
+- Multiplayer conflict resolution
+
+---
+
+### ⚓ Battleship — *Strategy*
+Real-time tactical naval warfare.
+
+**Core Mechanics**
+- Drag-and-drop ship placement  
+- Rotation support during deployment
+
+**Features**
+- Optimistic UI for instant shot feedback  
+- Server-authoritative turn timers  
+- Fleet status tracking
+
+---
+
+### 🎭 Coup — *Social Deduction*
+A digital adaptation of the bluff-heavy card game.
+
+**Core Mechanics**
+- Complex state machine handling nested phases  
+  *(Action → Challenge → Block → Resolution)*
+
+**Features**
+- Full action log history  
+- Strict action validation  
+- AFK protection mechanisms
+
+---
+
+### 🕵️ Spyfall — *Social*
+A conversation-driven game of deception and deduction.
+
+**Core Mechanics**
+- Hidden role distribution  
+- Location guessing under time pressure
+
+**Features**
+- Synchronized timers  
+- Voting system  
+- Dynamic location and card packs
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Category | Technologies |
-|-----------|------------|
-| **Core** | [Next.js 14 (App Router)](https://nextjs.org/), React 18, TypeScript |
-| **Styling** | [Tailwind CSS](https://tailwindcss.com/), Lucide React (Icons) |
-| **Backend / DB** | [Supabase](https://supabase.com/) (PostgreSQL, Auth, Realtime) |
-| **State Mgmt** | Custom React Hooks, Optimistic Updates |
-| **Deployment** | Vercel |
+| Category        | Technologies |
+|-----------------|--------------|
+| **Core**        | Next.js 14 (App Router), React 18, TypeScript |
+| **Styling**     | Tailwind CSS, Lucide React |
+| **Backend / DB**| Supabase (PostgreSQL, Auth, Realtime) |
+| **State Mgmt**  | Custom React Hooks, Optimistic Updates |
+| **Deployment**  | Vercel |
 
 ---
 
 ## 🚀 Local Development
 
 ### Prerequisites
-* Node.js 18+
-* Supabase Account
+- Node.js **18+**  
+- Supabase account
 
 ### Installation
 
-1.  **Clone the repository:**
-    ```bash
-    git clone [https://github.com/your-username/online-games.git](https://github.com/your-username/online-games.git)
-    cd online-games
-    ```
+Clone the repository:
+```bash
+git clone https://github.com/your-username/online-games.git
+cd online-games
+```
 
-2.  **Install dependencies:**
-    ```bash
-    npm install
-    # or
-    yarn install
-    ```
+## Install dependencies:
 
-3.  **Environment Setup:**
-    Create a `.env.local` file in the root directory and add your Supabase credentials:
-    ```env
-    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-    ```
+```bash
+npm install
+# or
+yarn install
+```
 
-4.  **Run the development server:**
-    ```bash
-    npm run dev
-    ```
-    Open [http://localhost:3000](http://localhost:3000) with your browser.
+### Environment Setup
+Create a .env.local file in the project root:
 
----
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+### Run the development server:
+```bash
+npm run dev
+```
 
 ## 📄 License
 
 This project is licensed under a **Non-Commercial License**.
 
-* ✅ **Free** for personal, educational, and non-profit use.
-* 🚫 **Commercial use** (selling, paid services, ads, etc.) is **strictly prohibited** without a separate license.
+✅ Free for personal, educational, and non-profit use
+🚫 Commercial use (sales, paid services, ads) is **not allowed** without a separate agreement
 
-To obtain a commercial license, please contact: **medius.org@gmail.com**
+📧 For commercial licensing, contact: medius.org@gmail.com
 
-See the [LICENSE](LICENSE) file for full details.
+See the **LICENSE** file for full details.
 
----
-
-**Developed with ❤️ by Darhaal Games**
+Developed with ❤️ by Darhaal Games
