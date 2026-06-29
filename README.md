@@ -1,7 +1,7 @@
 # 🎮 Darhaal Games  
 **Online Multiplayer Gaming Platform**
 
-![Version](https://img.shields.io/badge/version-1.5.4-blue.svg) ![License](https://img.shields.io/badge/license-Non--Commercial-red.svg) ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
+![Version](https://img.shields.io/badge/version-1.5.4-blue.svg) ![License](https://img.shields.io/badge/license-Non--Commercial-red.svg) ![Status](https://img.shields.io/badge/status-inactive-red.svg)
 
 Darhaal Games is a production-ready SPA platform for real-time multiplayer browser games. The project combines classic game mechanics with a modern tech stack, featuring a robust lobby system, optimistic UI updates, and WebSocket-based state synchronization via Supabase.
 
