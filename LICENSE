@@ -1,20 +1,64 @@
-License for Non-Commercial Use
+Source-Available License — View and Study Only
 
-Copyright (c) 2026 Darhaal Games
+Copyright (c) 2026 Artem Okhten. All rights reserved.
 
-1. NON-COMMERCIAL USE
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to use, copy, modify, and merge the Software for NON-COMMERCIAL purposes only.
+This source code is published so that it can be read, studied and evaluated.
+It is NOT open source. No rights are granted beyond those stated in Section 1.
 
-"Non-commercial" means that the Software may not be used for revenue-generating purposes, including but not limited to:
-- Selling the Software or derivative works;
-- Including the Software in a paid service or product;
-- Using the Software to support a commercial business.
 
-2. COMMERCIAL USE
-Any commercial use of the Software requires a separate commercial license from the Copyright Holder. To obtain a commercial license, please contact: medius.org@gmail.com.
+1. WHAT YOU MAY DO
 
-3. ATTRIBUTION
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+   a) View and read the source code.
 
-4. DISCLAIMER
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+   b) Study it for personal learning, education, academic research, or
+      technical evaluation of the author's work.
+
+   c) Quote short excerpts, with attribution, for commentary, teaching,
+      review, or academic citation.
+
+
+2. WHAT YOU MAY NOT DO
+
+   Without prior written permission from the copyright holder, you may not:
+
+   a) Use this software, or any part of it, in any project, product or
+      service — whether commercial or non-commercial, public or private;
+
+   b) Copy, reproduce or redistribute the source code, in whole or in part,
+      outside of the GitHub platform;
+
+   c) Modify it or create derivative works from it;
+
+   d) Deploy, host or run it as a service;
+
+   e) Use it, or any part of it, to train machine learning models.
+
+
+3. FORKING ON GITHUB
+
+   This repository is public on GitHub. GitHub's Terms of Service permit any
+   GitHub user to view and fork public repositories, and that permission comes
+   from the platform rather than from this license.
+
+   Forking is therefore possible and is not a violation of this license. It
+   grants no rights withheld by Section 2: a fork may be read and studied like
+   the original, and may not be used, modified for use, deployed, or
+   redistributed off-platform.
+
+
+4. REQUESTING PERMISSION
+
+   For any use beyond Section 1, including commercial licensing, contact:
+
+      artem@okhten.com
+
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+   DEALINGS IN THE SOFTWARE.
