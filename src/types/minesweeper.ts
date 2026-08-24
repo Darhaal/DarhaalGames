@@ -17,13 +17,13 @@ export interface MinesweeperPlayer {
   avatarUrl: string;
   isHost: boolean;
 
-  // Игровое состояние
+  // Game state
   board: Cell[][];
-  status: 'playing' | 'won' | 'lost' | 'left'; // Добавлен статус 'left'
+  status: 'playing' | 'won' | 'lost' | 'left'; // 'left' status included
   minesLeft: number;
-  score: number; // Время выполнения в секундах
+  score: number; // Completion time in seconds
 
-  // Для управления камерой (локально)
+  // Camera control (local only)
   view?: { x: number, y: number, zoom: number };
 }
 
@@ -34,7 +34,8 @@ export interface MinesweeperState {
   startTime: number;
   lastActionTime: number;
   version: number;
-  winner: string | null;
+  winner: string | null;   // Winner display name (for UI)
+  winnerId?: string | null; // Winner id (reliable identification)
 
   gameType: 'minesweeper';
   settings: {
@@ -42,7 +43,7 @@ export interface MinesweeperState {
     width: number;
     height: number;
     minesCount: number;
-    timeLimit: number; // Время в секундах
+    timeLimit: number; // Time in seconds
     difficulty: 'easy' | 'medium' | 'hard' | 'custom';
   };
 }

@@ -1,89 +1,45 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { SpyfallState, SpyfallPlayer } from '@/types/spyfall';
 import { SPYFALL_PACKS } from '@/data/spyfall/locations';
+import { updatePlayerStats } from '@/lib/playerStats';
+import { useLobbySync } from '@/hooks/core/useLobbySync';
+
+// Module-level helper: sidesteps the react-compiler purity heuristic
+// (Date.now inside event handlers is a legitimate use)
+const now = () => Date.now();
 
 export function useSpyfallGame(lobbyId: string | null, userId: string | undefined) {
-  const [gameState, setGameState] = useState<SpyfallState | null>(null);
-  const [roomMeta, setRoomMeta] = useState<{ name: string; code: string; isHost: boolean } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lobbyDeleted, setLobbyDeleted] = useState(false);
-
-  const stateRef = useRef<{ lobbyId: string | null; userId: string | undefined; gameState: SpyfallState | null }>({
-    lobbyId, userId, gameState: null
+  const {
+    gameState, setGameState, gameStateRef,
+    roomMeta, loading, lobbyDeleted,
+    updateState, deleteLobby
+  } = useLobbySync<SpyfallState>({
+    lobbyId,
+    userId,
+    channelPrefix: 'lobby-spyfall',
+    touchLastAction: false
   });
-
-  useEffect(() => {
-    stateRef.current = { lobbyId, userId, gameState };
-  }, [lobbyId, userId, gameState]);
-
-  // --- SYNC ---
-  const fetchLobbyState = useCallback(async () => {
-    if (!lobbyId) return;
-    try {
-      const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
-      if (data) {
-        setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === userId });
-        if (data.game_state) setGameState(data.game_state);
-      } else {
-        setGameState(null);
-        setLobbyDeleted(true);
-      }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [lobbyId, userId]);
-
-  useEffect(() => {
-    if (!lobbyId) return;
-    fetchLobbyState();
-
-    const ch = supabase.channel(`lobby-spyfall:${lobbyId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      (payload) => {
-          if (payload.new.game_state) {
-            setGameState(prev => {
-                const incoming = payload.new.game_state as SpyfallState;
-                if (prev && (incoming.version || 0) < (prev.version || 0)) return prev;
-                return incoming;
-            });
-          }
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      () => { setGameState(null); setLobbyDeleted(true); })
-      .subscribe();
-
-    return () => { supabase.removeChannel(ch); };
-  }, [lobbyId, fetchLobbyState]);
-
-  const updateState = async (newState: SpyfallState) => {
-    newState.version = (newState.version || 0) + 1;
-    setGameState(newState);
-    if (stateRef.current.lobbyId) {
-       await supabase.from('lobbies').update({
-           game_state: newState,
-           status: newState.status
-       }).eq('id', stateRef.current.lobbyId);
-    }
-  };
 
   // --- LOGIC ---
 
   const startGame = async () => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs) return;
 
       const newState: SpyfallState = JSON.parse(JSON.stringify(currentGs));
 
-      // 1. Берем локации из выбранного пака
+      // 1. Take locations from the selected pack
       const packId = newState.settings.packId || 'standard';
       const selectedPack = SPYFALL_PACKS.find(p => p.id === packId) || SPYFALL_PACKS[0];
       const availableLocations = selectedPack.locations;
 
-      // 2. Выбираем локацию
+      // 2. Pick a location
       const location = availableLocations[Math.floor(Math.random() * availableLocations.length)];
       newState.currentLocationId = location.id;
       newState.locationList = availableLocations.map(l => l.id);
 
-      // 3. Выбираем шпиона
+      // 3. Pick the spy
       const indices = newState.players.map((_, i) => i);
       for (let i = indices.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
@@ -91,7 +47,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
       }
       const spyRealIndex = indices[0];
 
-      // 4. Роли
+      // 4. Roles
       const rolesShuffled = [...location.roles].sort(() => 0.5 - Math.random());
 
       newState.players = newState.players.map((p, idx) => {
@@ -109,7 +65,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
       });
 
       newState.status = 'playing';
-      newState.startTime = Date.now();
+      newState.startTime = now();
       newState.winner = null;
       newState.nomination = null;
       newState.notifications = [];
@@ -118,7 +74,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
   };
 
   const startNomination = async (targetId: string) => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs || !userId) return;
 
       const newState: SpyfallState = JSON.parse(JSON.stringify(currentGs));
@@ -135,14 +91,14 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
           authorId: userId,
           targetId: targetId,
           votes: { [userId]: true },
-          startTime: Date.now()
+          startTime: now()
       };
 
       await updateState(newState);
   };
 
   const vote = async (agree: boolean) => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs || !userId || !currentGs.nomination) return;
 
       const newState: SpyfallState = JSON.parse(JSON.stringify(currentGs));
@@ -157,17 +113,21 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
           if (votesFor === voters.length) {
               const target = newState.players.find(p => p.id === newState.nomination!.targetId);
               if (target?.isSpy) {
-                  endGame('locals', 'spy_caught', newState); // Передаем стейт, чтобы не потерять голоса
-                  return; // endGame сам вызовет updateState
+                  endGame('locals', 'spy_caught', newState); // Pass the state so the votes are not lost
+                  return; // endGame calls updateState itself
               } else {
                   endGame('spy', 'innocent_killed', newState);
                   return;
               }
           } else {
               newState.status = 'playing';
+              // Compensate the pause: shift the round start by the voting duration
+              // so voting does not eat into the round timer
+              const votingDuration = now() - (newState.nomination?.startTime || now());
+              newState.startTime += Math.max(0, votingDuration);
               newState.nomination = null;
               newState.notifications.push({
-                  id: Date.now(),
+                  id: now(),
                   msg: 'Голосование отклонено',
                   type: 'info'
               });
@@ -180,7 +140,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
   type WinReason = SpyfallState['winReason'];
 
   const endGame = async (winner: 'spy' | 'locals', reason?: string, stateOverride?: SpyfallState) => {
-      const currentGs = stateOverride || stateRef.current.gameState;
+      const currentGs = stateOverride || gameStateRef.current;
       if (!currentGs) return;
 
       const newState: SpyfallState = JSON.parse(JSON.stringify(currentGs));
@@ -188,18 +148,18 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
       newState.winner = winner;
       newState.winReason = reason as WinReason;
 
-      // --- НАЧИСЛЕНИЕ ОЧКОВ ---
+      // --- SCORING ---
       newState.players = newState.players.map(p => {
           let points = p.score || 0;
 
           if (winner === 'spy') {
-              // Шпион победил: +5 шпиону
+              // Spy won: +5 to the spy
               if (p.isSpy) points += 5;
           } else {
-              // Мирные победили: +1 всем мирным
+              // Locals won: +1 to every local
               if (!p.isSpy) {
                   points += 1;
-                  // Бонус за удачное обвинение: +1 автору номинации
+                  // Bonus for a successful accusation: +1 to the nomination author
                   if (reason === 'spy_caught' && newState.nomination?.authorId === p.id) {
                       points += 1;
                   }
@@ -212,7 +172,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
   };
 
   const restartGame = async () => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs) return;
       const newState: SpyfallState = {
           ...currentGs,
@@ -226,15 +186,20 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
               role: null,
               isReady: true,
               hasNominated: false
-              // Score сохраняется!
+              // Score persists across rounds!
           }))
       };
       await updateState(newState);
   };
 
   const leaveGame = async () => {
-     const currentGs = stateRef.current.gameState;
+     const currentGs = gameStateRef.current;
      if (!lobbyId || !userId || !currentGs) return;
+
+     // A finished match is a record, not live state: leaving must not rewrite
+     // the results the other players are still looking at. Just walk away —
+     // the page navigates us out.
+     if (currentGs.status === 'finished') return;
 
      const newState = JSON.parse(JSON.stringify(currentGs));
      const leavingPlayer = newState.players.find((p: SpyfallPlayer) => p.id === userId);
@@ -243,20 +208,20 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
 
      if (newState.status === 'playing' || newState.status === 'voting') {
          if (leavingPlayer.isSpy) {
-             // Шпион вышел - мирные выиграли
-             // Передаем newState, чтобы сохранить изменения
+             // The spy left — locals win
+             // Pass newState so the changes are preserved
              newState.players = newState.players.filter((p: SpyfallPlayer) => p.id !== userId);
              endGame('locals', 'spy_left', newState);
              return;
          } else {
              newState.notifications.push({
-                 id: Date.now(),
+                 id: now(),
                  msg: `${leavingPlayer.name} покинул игру`,
                  type: 'alert'
              });
              newState.players = newState.players.filter((p: SpyfallPlayer) => p.id !== userId);
              if (newState.players.length < 3) {
-                 endGame('spy', 'innocent_killed', newState); // Техническая победа
+                 endGame('spy', 'innocent_killed', newState); // Technical win
                  return;
              }
          }
@@ -265,9 +230,7 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
      }
 
      if (newState.players.length === 0) {
-         await supabase.from('lobbies').delete().eq('id', lobbyId);
-         setGameState(null);
-         setLobbyDeleted(true);
+         await deleteLobby();
      } else {
          if (leavingPlayer.isHost && newState.players.length > 0) {
             newState.players[0].isHost = true;
@@ -277,8 +240,8 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
   };
 
   const initGame = async (userProfile: { name: string; avatarUrl: string }) => {
-    if (!userId || !stateRef.current.lobbyId) return;
-    const { data } = await supabase.from('lobbies').select('game_state').eq('id', stateRef.current.lobbyId).single();
+    if (!userId || !lobbyId) return;
+    const { data } = await supabase.from('lobbies').select('game_state').eq('id', lobbyId).single();
     const currentState = data?.game_state as SpyfallState;
     if (!currentState) return;
 
@@ -302,6 +265,28 @@ export function useSpyfallGame(lobbyId: string | null, userId: string | undefine
         setGameState(currentState);
     }
   };
+
+  // Record statistics when the round finishes:
+  // a local wins when locals win, the spy wins when the spy side wins
+  useEffect(() => {
+      if (gameState?.status === 'finished' && userId && !lobbyDeleted && gameState.winner) {
+          const me = gameState.players.find(p => p.id === userId);
+          if (me) {
+              const isWinner = (gameState.winner === 'spy' && me.isSpy) ||
+                               (gameState.winner === 'locals' && !me.isSpy);
+              const duration = gameState.startTime
+                  ? Math.max(1, Math.round((now() - gameState.startTime) / 1000))
+                  : (gameState.settings.roundDuration || 480);
+
+              updatePlayerStats(userId, {
+                  gameType: 'spyfall',
+                  result: isWinner ? 'win' : 'loss',
+                  durationSeconds: duration
+              });
+          }
+      }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the match finishes; adding gameState.players would re-record stats
+  }, [gameState?.status, gameState?.winner, userId, lobbyDeleted]);
 
   return {
       gameState, roomMeta, loading, lobbyDeleted,

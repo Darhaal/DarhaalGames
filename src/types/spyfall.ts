@@ -8,7 +8,7 @@ export interface SpyfallLocation {
   id: string;
   name: { ru: string; en: string };
   roles: SpyfallRole[];
-  image: string; // Путь к картинке
+  image: string; // Image path
 }
 
 export interface SpyfallPack {
@@ -24,45 +24,45 @@ export interface SpyfallPlayer {
   avatarUrl: string;
   isHost: boolean;
 
-  // Игровые данные
+  // Game data
   isSpy: boolean;
   role: string | null;
   isReady: boolean;
-  hasNominated?: boolean; // Голосовал ли уже в этом раунде
-  score: number; // Очки за серию игр
+  hasNominated?: boolean; // Whether the player already nominated this round
+  score: number; // Score across a series of games
 }
 
 export interface Nomination {
-  authorId: string; // Кто начал голосование
-  targetId: string; // Кого обвиняют
-  votes: Record<string, boolean>; // id игрока -> за/против
-  startTime: number; // Для таймера голосования
+  authorId: string; // Who started the vote
+  targetId: string; // Who is accused
+  votes: Record<string, boolean>; // player id -> yes/no
+  startTime: number; // For the voting timer
 }
 
 export interface SpyfallState {
   players: SpyfallPlayer[];
   status: SpyfallStatus;
 
-  // Настройки
+  // Settings
   settings: {
     roundDuration: number;
     spyCount: number;
     useCustomLocations: boolean;
     customLocations: string[];
-    packId: string; // ID выбранного пака (строго один)
+    packId: string; // Selected pack id (exactly one)
   };
 
-  // Раунд
+  // Round
   currentLocationId: string | null;
-  locationList: string[]; // Список ID локаций текущего раунда
+  locationList: string[]; // Location ids of the current round
   startTime: number;
   winner: 'spy' | 'locals' | null;
   winReason?: 'time' | 'guessed_loc' | 'spy_failed_guess' | 'spy_caught' | 'innocent_killed' | 'spy_left';
 
-  // Голосование
+  // Voting
   nomination: Nomination | null;
 
-  // Уведомления
+  // Notifications
   notifications: Array<{ id: number; msg: string; type: 'info' | 'alert' | 'success' }>;
 
   version: number;

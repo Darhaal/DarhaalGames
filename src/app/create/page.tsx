@@ -1,12 +1,18 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import type { User } from '@supabase/supabase-js';
+import { useLang } from '@/hooks/useLang';
+import { errorMessage } from '@/lib/errors';
+import { showToast } from '@/lib/toast';
+import { COPYRIGHT, generateRoomCode } from '@/constants/app';
+import SettingsButton from '@/components/SettingsButton';
 import {
   ArrowLeft, Users, Lock, Unlock,
   ScrollText, ArrowRight, Eye, EyeOff, Loader2, Type, UserPlus,
-  Bomb, Ship, ShieldAlert, Flag, Clock, Grid, Fingerprint, Layers, Map, Zap
+  Bomb, Ship, Flag, Clock, Grid, Fingerprint, Layers, Map, Zap
 } from 'lucide-react';
 import { GameState as CoupState, Player as CoupPlayer } from '@/types/coup';
 import { BattleshipState, PlayerBoard as BattleshipPlayer } from '@/types/battleship';
@@ -24,10 +30,8 @@ type Game = {
   minPlayers: number;
   maxPlayers: number;
   icon: React.ReactNode;
-  disabled?: boolean;
 };
 
-// Configuration including blocked games
 const GAMES: Game[] = [
   {
     id: 'spyfall',
@@ -39,7 +43,6 @@ const GAMES: Game[] = [
     minPlayers: 3,
     maxPlayers: 12,
     icon: <Fingerprint className="w-8 h-8 sm:w-10 sm:h-10" />,
-    disabled: false,
   },
   {
     id: 'minesweeper',
@@ -51,7 +54,6 @@ const GAMES: Game[] = [
     minPlayers: 1,
     maxPlayers: 4,
     icon: <Bomb className="w-8 h-8 sm:w-10 sm:h-10" />,
-    disabled: false,
   },
   {
     id: 'flager',
@@ -63,7 +65,6 @@ const GAMES: Game[] = [
     minPlayers: 1,
     maxPlayers: 4,
     icon: <Flag className="w-8 h-8 sm:w-10 sm:h-10" />,
-    disabled: false,
   },
   {
     id: 'battleship',
@@ -75,7 +76,6 @@ const GAMES: Game[] = [
     minPlayers: 2,
     maxPlayers: 2,
     icon: <Ship className="w-8 h-8 sm:w-10 sm:h-10" />,
-    disabled: false,
   },
   {
     id: 'coup',
@@ -87,18 +87,6 @@ const GAMES: Game[] = [
     minPlayers: 2,
     maxPlayers: 6,
     icon: <ScrollText className="w-8 h-8 sm:w-10 sm:h-10" />,
-  },
-  {
-    id: 'mafia',
-    title: { ru: 'Мафия', en: 'Mafia' },
-    desc: {
-      ru: 'Город засыпает...',
-      en: 'The city falls asleep...'
-    },
-    minPlayers: 4,
-    maxPlayers: 12,
-    icon: <Users className="w-8 h-8 sm:w-10 sm:h-10" />,
-    disabled: true,
   },
 ];
 
@@ -117,12 +105,11 @@ const TRANSLATIONS = {
     duration: 'Время хода',
     seconds: 'сек',
     minutes: 'мин',
-    comingSoon: 'Скоро',
     error: 'Ошибка',
     lobbyName: 'Название',
     enterName: 'Имя комнаты...',
     enterPass: '••••••',
-    footer: '© 2026 Darhaal Games Inc.',
+    footer: COPYRIGHT,
     msSize: 'Размер поля',
     msMines: 'Плотность мин',
     msTime: 'Лимит времени',
@@ -146,12 +133,11 @@ const TRANSLATIONS = {
     duration: 'Turn Time',
     seconds: 's',
     minutes: 'm',
-    comingSoon: 'Soon',
     error: 'Error',
     lobbyName: 'Name',
     enterName: 'Room name...',
     enterPass: '••••••',
-    footer: '© 2026 Darhaal Games Inc.',
+    footer: COPYRIGHT,
     msSize: 'Grid Size',
     msMines: 'Mine Density',
     msTime: 'Time Limit',
@@ -165,9 +151,9 @@ const TRANSLATIONS = {
 
 export default function CreatePage() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
   const [step, setStep] = useState<'selection' | 'settings'>('selection');
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
 
@@ -177,6 +163,12 @@ export default function CreatePage() {
   const [loading, setLoading] = useState(false);
 
   const [lobbyName, setLobbyName] = useState('');
+  /**
+   * The last name this page generated on its own. Switching games should
+   * refresh the suggested name, but must never overwrite one the user typed —
+   * comparing against this tells the two apart.
+   */
+  const autoNameRef = useRef('');
   const [maxPlayers, setMaxPlayers] = useState(6);
 
   // Flager settings
@@ -190,7 +182,7 @@ export default function CreatePage() {
 
   // Spyfall Settings
   const [spyTime, setSpyTime] = useState(8);
-  const [spyPack, setSpyPack] = useState<string>('standard'); // Single pack ID
+  const [spyPack, setSpyPack] = useState<string>(SPYFALL_PACKS[0].id); // Single pack ID
 
   useEffect(() => {
     const checkUser = async () => {
@@ -204,18 +196,21 @@ export default function CreatePage() {
         setAuthLoading(false);
     };
     checkUser();
-
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
   }, [router]);
 
   useEffect(() => {
     if (selectedGame) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- seeds the editable player-count control from the chosen game; the user can then change it, so it cannot be derived during render
         setMaxPlayers(selectedGame.maxPlayers);
-        if (!lobbyName && user) {
+        // Reseed while the field still holds our own suggestion (or is empty):
+        // picking Spyfall, going back and picking Flager used to keep the
+        // Spyfall name, because the old guard only checked for emptiness.
+        if (user && (!lobbyName || lobbyName === autoNameRef.current)) {
             const userName = user.user_metadata?.username || user.email?.split('@')[0] || 'Player';
             const suffix = lang === 'ru' ? 'Лобби' : 'Lobby';
-            setLobbyName(`${selectedGame.title[lang]} ${suffix} - ${userName}`);
+            const generated = `${selectedGame.title[lang]} ${suffix} - ${userName}`;
+            autoNameRef.current = generated;
+            setLobbyName(generated);
         }
 
         if (selectedGame.id === 'minesweeper') {
@@ -224,9 +219,10 @@ export default function CreatePage() {
             setMsTimeLimit(20);
         } else if (selectedGame.id === 'spyfall') {
             setSpyTime(8);
-            setSpyPack('standard');
+            setSpyPack(SPYFALL_PACKS[0].id);
         }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- seed defaults only when the game/user changes, not on every lobbyName keystroke
   }, [selectedGame, user, lang]);
 
   const t = TRANSLATIONS[lang];
@@ -239,8 +235,8 @@ export default function CreatePage() {
     if (!user) return;
 
     try {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      let initialState: any;
+      const code = generateRoomCode();
+      let initialState: SpyfallState | MinesweeperState | CoupState | BattleshipState | FlagerState | undefined;
 
       const userName = user.user_metadata?.username || user.user_metadata?.full_name || user.email?.split('@')[0] || 'Player';
       const userAvatar = user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
@@ -327,8 +323,11 @@ export default function CreatePage() {
 
       } else if (selectedGame.id === 'flager') {
           const initialHost = { id: user.id, name: userName, avatarUrl: userAvatar, isHost: true, score: 0, guesses: [], hasFinishedRound: false, roundScore: 0, history: [], isReadyForNextRound: false };
-          initialState = { players: { [user.id]: initialHost }, status: 'waiting', targetChain: [], currentRoundIndex: 0, roundStartTime: Date.now(), lastActionTime: Date.now(), version: 1, gameType: 'flager', settings: { maxPlayers, totalRounds: rounds, roundDuration } };
+          // IMPORTANT: FlagerState.players is an array (unlike the Battleship/Minesweeper record)
+          initialState = { players: [initialHost], status: 'waiting', targetChain: [], currentRoundIndex: 0, roundStartTime: Date.now(), lastActionTime: Date.now(), version: 1, gameType: 'flager', settings: { maxPlayers, totalRounds: rounds, roundDuration } };
       }
+
+      if (!initialState) throw new Error('Unknown game type');
 
       const finalGameState = {
           ...initialState,
@@ -336,14 +335,26 @@ export default function CreatePage() {
           settings: { ...initialState.settings, maxPlayers: maxPlayers }
       };
 
-      const { data, error } = await supabase.from('lobbies').insert({
-        code, name: lobbyName, host_id: user.id, is_private: isPrivate, password: isPrivate ? password : null, status: 'waiting', game_state: finalGameState,
-      }).select().single();
+      // Insert with retry in case of a room-code collision (unique index on code)
+      let data = null;
+      let error = null;
+      let insertCode = code;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        ({ data, error } = await supabase.from('lobbies').insert({
+          code: insertCode, name: lobbyName, host_id: user.id, is_private: isPrivate, password: isPrivate ? password : null, status: 'waiting', game_state: finalGameState,
+          // Select only `id` — a bare .select() means `*`, which needs SELECT on
+          // every column including `password`, and clients no longer hold that.
+        }).select('id').single());
 
-      if (error) throw error;
+        if (!error) break;
+        if (error.code !== '23505') break; // not a collision — do not retry
+        insertCode = generateRoomCode();
+      }
+
+      if (error || !data) throw error || new Error('Insert failed');
       router.push(`/game/${selectedGame.id}?id=${data.id}`);
-    } catch (error: any) {
-      alert(t.error + error.message);
+    } catch (error: unknown) {
+      showToast(t.error + ': ' + errorMessage(error), 'error');
       setLoading(false);
     }
   };
@@ -358,22 +369,17 @@ export default function CreatePage() {
       {GAMES.map(game => (
         <button
           key={game.id}
-          onClick={() => { if (!game.disabled) { setSelectedGame(game); setStep('settings'); } }}
-          disabled={game.disabled}
+          onClick={() => { setSelectedGame(game); setStep('settings'); }}
           className={`
             group relative overflow-hidden rounded-[32px] p-1 text-left transition-all duration-300
-            ${game.disabled
-              ? 'opacity-60 cursor-not-allowed grayscale'
-              : 'hover:scale-[1.01] hover:shadow-xl hover:shadow-[#1A1F26]/5 border border-[#E6E1DC] bg-white hover:border-[#9e1316]/20'
-            }
+            hover:scale-[1.01] hover:shadow-xl hover:shadow-[#1A1F26]/5 border border-[#E6E1DC] bg-white hover:border-[#9e1316]/20
           `}
         >
           <div className="relative z-20 p-5 sm:p-6 flex flex-col h-full">
               <div className="flex justify-between items-start mb-4">
-                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 ${game.disabled ? 'bg-gray-100 text-gray-400' : 'bg-[#F8FAFC] border border-[#E6E1DC] text-[#1A1F26] group-hover:bg-[#1A1F26] group-hover:text-white group-hover:border-[#1A1F26]'}`}>
+                 <div className="w-14 h-14 rounded-2xl flex items-center justify-center transition-all duration-300 bg-[#F8FAFC] border border-[#E6E1DC] text-[#1A1F26] group-hover:bg-[#1A1F26] group-hover:text-white group-hover:border-[#1A1F26]">
                    {game.icon}
                  </div>
-                 {game.disabled && <span className="text-[10px] font-bold uppercase bg-gray-100 px-2 py-1 rounded text-gray-400 tracking-wide border border-gray-200">{t.comingSoon}</span>}
               </div>
 
               <div className="mt-auto">
@@ -589,7 +595,7 @@ export default function CreatePage() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans relative overflow-hidden">
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
       <div className="absolute top-[-20%] right-[-10%] w-[600px] h-[600px] bg-[#9e1316]/5 rounded-full blur-[100px] pointer-events-none" />
 
       {/* HEADER: STICKY & UNIFIED */}
@@ -606,7 +612,9 @@ export default function CreatePage() {
                 </p>
             </div>
           </div>
-          <div className="hidden md:block w-32" />
+          <div className="flex justify-end">
+            <SettingsButton />
+          </div>
         </div>
       </header>
 

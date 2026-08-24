@@ -49,7 +49,9 @@ export interface GameState {
   turnIndex: number;
   logs: GameLog[];
   status: 'waiting' | 'playing' | 'finished';
-  winner?: string;
+  winner?: string;      // Winner display name (for UI)
+  winnerId?: string;    // Winner id (reliable identification)
+  startTime?: number;   // Match start (epoch ms) — used to measure duration
 
   phase: GamePhase;
 

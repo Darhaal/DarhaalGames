@@ -3,12 +3,13 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
+import { defaultAvatar } from '@/constants/app';
 import { Loader2 } from 'lucide-react';
 import UniversalLobby, { LobbyPlayer } from '@/components/UniversalLobby';
 import { useSpyfallGame } from '@/hooks/useSpyfallGame';
 import SpyfallGame from '@/components/SpyfallGame';
-
-type Lang = 'ru' | 'en';
+import GameNotJoined from '@/components/GameNotJoined';
 
 const UI_TEXT = {
   ru: {
@@ -36,7 +37,7 @@ function SpyfallContent() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [isLeaving, setIsLeaving] = useState(false);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
 
   useEffect(() => {
     const checkUser = async () => {
@@ -47,7 +48,7 @@ function SpyfallContent() {
           // Fix: Fallback to 'Player' instead of 'Agent'
           const name = meta?.username || (data.user.is_anonymous ? 'Player' : 'Player');
           // Fix: Generate avatar if missing
-          const avatar = meta?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${data.user.id}&backgroundColor=transparent`;
+          const avatar = meta?.avatar_url || defaultAvatar(data.user.id);
 
           setUserName(name);
           setUserAvatar(avatar);
@@ -59,8 +60,6 @@ function SpyfallContent() {
     };
     checkUser();
 
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
   }, [router]);
 
   const {
@@ -70,7 +69,7 @@ function SpyfallContent() {
   } = useSpyfallGame(lobbyId, userId);
 
   useEffect(() => {
-      if (userId && gameState && !gameState.players.find(p => p.id === userId)) {
+      if (userId && gameState && gameState.status === 'waiting' && !gameState.players.find(p => p.id === userId)) {
           initGame({ name: userName, avatarUrl: userAvatar });
       }
   }, [userId, gameState, initGame, userName, userAvatar]);
@@ -80,24 +79,11 @@ function SpyfallContent() {
       setIsLeaving(true);
       try {
         await leaveGame();
-      } catch (error) {
-        console.error("Leave game failed", error);
+      } catch {
+        // Best-effort leave — ignore failures on unmount/navigation
       }
       router.push('/play');
   };
-
-  // Safe window close handling
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-       // We can't await here, but we can try to leave if supported
-       // Note: Reliable "leave on close" requires Beacon API or similar, which is complex for Supabase.
-       // This prevents accidental closing.
-       // e.preventDefault();
-       // e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
 
   const t = UI_TEXT[lang];
 
@@ -117,6 +103,11 @@ function SpyfallContent() {
   }
 
   if (!gameState) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-400">{t.lobbyNotFound}</div>;
+
+  // Late visitor: the game is already running and we are not part of it
+  if (gameState.status !== 'waiting' && !gameState.players.find(p => p.id === userId)) {
+      return <GameNotJoined lang={lang} />;
+  }
 
   if (gameState.status === 'waiting') {
       const playersList: LobbyPlayer[] = gameState.players.map(p => ({

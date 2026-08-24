@@ -1,10 +1,10 @@
 // constants/coup.ts
 
-import { Crown, Skull, Swords, RefreshCw, Shield } from 'lucide-react';
+import { Crown, Skull, Swords, RefreshCw, Shield, LucideIcon } from 'lucide-react';
 import { Role } from '@/types/coup';
 
 // Visual configuration for roles (Colors & Icons)
-export const ROLE_CONFIG: Record<Role, { color: string; icon: any }> = {
+export const ROLE_CONFIG: Record<Role, { color: string; icon: LucideIcon }> = {
   duke: { color: '#6B21A8', icon: Crown },       // Royal Purple
   assassin: { color: '#9F1239', icon: Skull },    // Crimson Blood
   captain: { color: '#1E3A8A', icon: Swords },    // Imperial Blue

@@ -1,186 +1,51 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '@/lib/supabase';
-import { BattleshipState, Ship, Coordinate, Orientation, FLEET_CONFIG, PlayerBoard } from '@/types/battleship';
+import { useState, useEffect, useRef } from 'react';
+import { BattleshipState, Ship } from '@/types/battleship';
 import { updatePlayerStats } from '@/lib/playerStats';
+import { useLobbySync } from '@/hooks/core/useLobbySync';
+import { getKey, isValidCoord, getShipCoords, checkPlacement, shuffleFleet } from '@/lib/gameLogic/battleship';
 
-const BOARD_SIZE = 10;
-const getKey = (x: number, y: number) => `${x},${y}`;
-const isValidCoord = (x: number, y: number) => x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE;
-
-const getShipCoords = (ship: Ship): Coordinate[] => {
-  const coords: Coordinate[] = [];
-  for (let i = 0; i < ship.size; i++) {
-    coords.push({
-      x: ship.orientation === 'horizontal' ? ship.position.x + i : ship.position.x,
-      y: ship.orientation === 'vertical' ? ship.position.y + i : ship.position.y,
-    });
-  }
-  return coords;
-};
-
-export const checkPlacement = (ships: Ship[], newShip: Ship, ignoreShipId?: string): boolean => {
-  const newShipCoords = getShipCoords(newShip);
-  for (const c of newShipCoords) {
-    if (!isValidCoord(c.x, c.y)) return false;
-  }
-
-  const dangerZone = new Set<string>();
-  const otherShips = ships.filter(s => s.id !== newShip.id && s.id !== ignoreShipId);
-
-  otherShips.forEach(s => {
-    getShipCoords(s).forEach(coord => {
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          dangerZone.add(getKey(coord.x + dx, coord.y + dy));
-        }
-      }
-    });
-  });
-
-  for (const c of newShipCoords) {
-    if (dangerZone.has(getKey(c.x, c.y))) return false;
-  }
-  return true;
-};
-
-const shuffleFleet = (): Ship[] => {
-  const ships: Ship[] = [];
-  let attempts = 0;
-  while (ships.length < 10 && attempts < 200) {
-    ships.length = 0;
-    let success = true;
-    for (const config of FLEET_CONFIG) {
-      for (let i = 0; i < config.count; i++) {
-        let placed = false;
-        let innerAttempts = 0;
-        while (!placed && innerAttempts < 100) {
-          const orientation: Orientation = Math.random() > 0.5 ? 'horizontal' : 'vertical';
-          const x = Math.floor(Math.random() * BOARD_SIZE);
-          const y = Math.floor(Math.random() * BOARD_SIZE);
-          const newShip: Ship = {
-            id: `${config.type}-${i}-${Math.random()}`,
-            type: config.type,
-            size: config.size,
-            orientation,
-            position: { x, y },
-            hits: 0
-          };
-          if (checkPlacement(ships, newShip)) {
-            ships.push(newShip);
-            placed = true;
-          }
-          innerAttempts++;
-        }
-        if (!placed) { success = false; break; }
-      }
-      if (!success) break;
-    }
-    if (success) return ships;
-    attempts++;
-  }
-  return [];
-};
+// Re-export for import backward compatibility
+export { checkPlacement };
 
 export function useBattleshipGame(
     lobbyId: string | null,
     user: { id: string; name: string; avatarUrl: string } | null
 ) {
-  const [gameState, setGameState] = useState<BattleshipState | null>(null);
-  const [roomMeta, setRoomMeta] = useState<{ name: string; code: string; isHost: boolean } | null>(null);
   const [myShips, setMyShips] = useState<Ship[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [lobbyDeleted, setLobbyDeleted] = useState(false);
+  const myShipsRef = useRef<Ship[]>([]);
+  useEffect(() => { myShipsRef.current = myShips; }, [myShips]);
 
-  const stateRef = useRef<{ lobbyId: string | null; user: typeof user; gameState: BattleshipState | null; myShips: Ship[] }>({
-    lobbyId, user, gameState: null, myShips: []
-  });
+  const {
+    gameState, gameStateRef,
+    roomMeta, loading, lobbyDeleted,
+    updateState, deleteLobby
+  } = useLobbySync<BattleshipState>({
+    lobbyId,
+    userId: user?.id,
+    channelPrefix: 'lobby-bs',
+    getHostId: (state) => Object.values(state.players).find(pl => pl.isHost)?.id,
+    // Sync local ships with the server state:
+    // the server is authoritative in battle; during setup we only pick up on reconnect
+    onIncoming: (incoming) => {
+      const uid = user?.id;
+      if (!uid || !incoming.players?.[uid]?.ships) return;
+      const serverShips = incoming.players[uid].ships;
 
-  useEffect(() => {
-    stateRef.current = { lobbyId, user, gameState, myShips };
-  }, [lobbyId, user, gameState, myShips]);
-
-  // --- SYNC ---
-  const fetchLobbyState = useCallback(async () => {
-    if (!lobbyId) return;
-    try {
-      const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
-      if (data) {
-        setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === user?.id });
-        if (data.game_state) {
-           setGameState(data.game_state);
-           if (user?.id && data.game_state.players) {
-              const p = data.game_state.players[user.id];
-              if (p?.ships && p.ships.length > 0 && stateRef.current.myShips.length === 0) {
-                  setMyShips(p.ships);
-              }
-           }
+      if (incoming.phase === 'playing') {
+        setMyShips(serverShips);
+      } else if (incoming.phase === 'setup') {
+        if (myShipsRef.current.length === 0 && serverShips.length > 0) {
+          setMyShips(serverShips);
         }
-      } else {
-          setGameState(null);
-          setLobbyDeleted(true);
       }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [lobbyId, user?.id]);
-
-  useEffect(() => {
-    if (!lobbyId) return;
-    fetchLobbyState();
-
-    const ch = supabase.channel(`lobby-bs:${lobbyId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      (payload) => {
-        const newState = payload.new.game_state as BattleshipState;
-        if (newState) {
-          setGameState(prev => {
-            if (newState.status === 'waiting') return newState;
-            if (prev && (newState.version || 0) < (prev.version || 0)) return prev;
-            return newState;
-          });
-
-          if (user?.id && newState.players?.[user.id]?.ships) {
-              const serverShips = newState.players[user.id].ships;
-
-              if (newState.phase === 'playing') {
-                  setMyShips(serverShips);
-              } else if (newState.phase === 'setup') {
-                  if (stateRef.current.myShips.length === 0 && serverShips.length > 0) {
-                      setMyShips(serverShips);
-                  }
-              }
-          }
-        }
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      () => {
-          setGameState(null);
-          setLobbyDeleted(true);
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(ch); };
-  }, [lobbyId, fetchLobbyState, user?.id]);
-
-  const updateState = async (newState: BattleshipState) => {
-    newState.version = (newState.version || 0) + 1;
-    newState.lastActionTime = Date.now();
-    setGameState(newState);
-    if (stateRef.current.lobbyId) {
-       const hostPlayerId = Object.values(newState.players).find(p => p.isHost)?.id;
-       const updatePayload: any = {
-           game_state: newState,
-           status: newState.status
-       };
-       if (hostPlayerId) updatePayload.host_id = hostPlayerId;
-
-       await supabase.from('lobbies').update(updatePayload).eq('id', stateRef.current.lobbyId);
     }
-  };
+  });
 
   // --- ACTIONS ---
 
   const initGame = async () => {
-    if (!user || !stateRef.current.gameState) return;
-    const currentState = stateRef.current.gameState;
+    if (!user || !gameStateRef.current) return;
+    const currentState = gameStateRef.current;
 
     let playersObj = currentState.players;
     if (Array.isArray(playersObj)) playersObj = {};
@@ -236,7 +101,7 @@ export function useBattleshipGame(
   const submitShips = async () => {
     if (!user?.id || !gameState) return;
 
-    const currentGs = stateRef.current.gameState || gameState;
+    const currentGs = gameStateRef.current || gameState;
     const newState = JSON.parse(JSON.stringify(currentGs)) as BattleshipState;
 
     newState.players[user.id].ships = myShips;
@@ -249,6 +114,7 @@ export function useBattleshipGame(
       newState.status = 'playing';
       newState.turn = playersArr[0].id;
       newState.turnDeadline = Date.now() + (60 * 1000);
+      newState.startTime = Date.now();
     }
 
     await updateState(newState);
@@ -305,8 +171,8 @@ export function useBattleshipGame(
   };
 
   const handleTimeout = async () => {
-    const currentGs = stateRef.current.gameState;
-    const currentUser = stateRef.current.user;
+    const currentGs = gameStateRef.current;
+    const currentUser = user;
     if (!currentGs || !currentUser || currentGs.phase !== 'playing' || currentGs.turn !== currentUser.id) return;
 
     const opponentId = Object.keys(currentGs.players).find(id => id !== currentUser.id);
@@ -320,8 +186,13 @@ export function useBattleshipGame(
   };
 
   const leaveGame = async () => {
-     const currentGs = stateRef.current.gameState;
+     const currentGs = gameStateRef.current;
      if (!lobbyId || !user || !currentGs) return;
+
+     // A finished match is a record, not live state: leaving must not rewrite
+     // the results the other players are still looking at. Just walk away —
+     // the page navigates us out.
+     if (currentGs.status === 'finished') return;
 
      const newState = JSON.parse(JSON.stringify(currentGs));
      const wasHost = newState.players[user.id]?.isHost;
@@ -329,14 +200,16 @@ export function useBattleshipGame(
      delete newState.players[user.id];
 
      if (Object.keys(newState.players).length === 0) {
-         await supabase.from('lobbies').delete().eq('id', lobbyId);
+         await deleteLobby();
      } else {
          if (wasHost) {
              const nextHostId = Object.keys(newState.players)[0];
              if (nextHostId) newState.players[nextHostId].isHost = true;
          }
 
-         if (newState.status === 'playing' || newState.phase === 'setup') {
+         // Technical win for the remaining player only if the match already started
+         // (phase === 'setup' is set before the start in the waiting lobby — leaving must not end the game)
+         if (newState.status === 'playing') {
              newState.phase = 'finished';
              newState.status = 'finished';
              newState.winner = Object.keys(newState.players)[0];
@@ -345,12 +218,14 @@ export function useBattleshipGame(
      }
   };
 
-  // ОТСЛЕЖИВАНИЕ КОНЦА ИГРЫ ДЛЯ ЗАПИСИ СТАТИСТИКИ
+  // TRACK GAME END TO RECORD STATISTICS
   useEffect(() => {
       if (gameState?.status === 'finished' && user?.id && !lobbyDeleted) {
           const isWinner = gameState.winner === user.id;
-          // Время можно улучшить, если хранить startTime, но пока hardcode 10 минут
-          const duration = 600;
+          // Actual match duration; 600s fallback for legacy states
+          const duration = gameState.startTime
+              ? Math.max(1, Math.round((Date.now() - gameState.startTime) / 1000))
+              : 600;
 
           updatePlayerStats(user.id, {
               gameType: 'battleship',
@@ -358,6 +233,7 @@ export function useBattleshipGame(
               durationSeconds: duration
           });
       }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the match finishes; adding gameState.players would re-record stats
   }, [gameState?.status, gameState?.winner, user?.id, lobbyDeleted]);
 
   return {

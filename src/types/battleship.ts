@@ -37,6 +37,8 @@ export interface BattleshipState {
   winner: string | null;
   logs: { text: string; time: string }[];
   lastActionTime: number;
+  // Battle phase start (epoch ms) — used to measure match duration
+  startTime?: number;
   // Absolute timestamp (epoch ms) when the current turn must end.
   // This ensures server-authoritative timing across all clients.
   turnDeadline?: number;

@@ -3,11 +3,13 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
+import { defaultAvatar } from '@/constants/app';
 import { Loader2 } from 'lucide-react';
 import { useCoupGame } from '@/hooks/useCoupGame';
-import { Lang } from '@/types/coup';
 import UniversalLobby, { LobbyPlayer } from '@/components/UniversalLobby';
 import CoupGame from '@/components/CoupGame';
+import GameNotJoined from '@/components/GameNotJoined';
 
 const UI_TEXT = {
   ru: {
@@ -30,12 +32,14 @@ function CoupContent() {
   const lobbyId = searchParams.get('id');
 
   const [userId, setUserId] = useState<string>();
+  const [userName, setUserName] = useState<string>('');
+  const [userAvatar, setUserAvatar] = useState<string>('');
   const [authLoading, setAuthLoading] = useState(true);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
   const [isLeaving, setIsLeaving] = useState(false);
 
   const {
-    gameState, roomMeta, loading, lobbyDeleted, performAction, startGame, leaveGame,
+    gameState, roomMeta, loading, lobbyDeleted, initGame, performAction, startGame, leaveGame,
     pass, challenge, block, resolveLoss, resolveExchange, skipTurn
   } = useCoupGame(lobbyId, userId);
 
@@ -44,6 +48,8 @@ function CoupContent() {
         const { data } = await supabase.auth.getUser();
         if (data.user) {
             setUserId(data.user.id);
+            setUserName(data.user.user_metadata?.username || data.user.user_metadata?.full_name || 'Player');
+            setUserAvatar(data.user.user_metadata?.avatar_url || defaultAvatar(data.user.id));
         } else {
             const currentPath = window.location.pathname + window.location.search;
             router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
@@ -51,10 +57,14 @@ function CoupContent() {
         setAuthLoading(false);
     };
     checkUser();
-
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang === 'en' || savedLang === 'ru') setLang(savedLang);
   }, [router]);
+
+  // Self-join when opened via a direct link (only while the lobby is waiting)
+  useEffect(() => {
+      if (userId && gameState && gameState.status === 'waiting' && !gameState.players?.find(p => p.id === userId)) {
+          initGame({ name: userName, avatarUrl: userAvatar });
+      }
+  }, [userId, gameState, initGame, userName, userAvatar]);
 
   const handleLeave = async () => {
       if (isLeaving) return;
@@ -87,6 +97,11 @@ function CoupContent() {
   }
 
   if (!gameState) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-400">{t.lobbyNotFound}</div>;
+
+  // Late visitor: the game is already running and we are not part of it
+  if (gameState.status !== 'waiting' && !gameState.players?.find(p => p.id === userId)) {
+      return <GameNotJoined lang={lang} />;
+  }
 
   if (gameState.status === 'waiting') {
       const playersList: LobbyPlayer[] = (gameState.players || []).map(p => ({

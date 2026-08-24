@@ -1,18 +1,25 @@
 'use client';
 
+import Image from 'next/image';
+import { createPortal } from 'react-dom';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  X, Volume2, Globe, Shield, User, Mail, Upload, Loader2, Check, Edit2,
-  Camera, LogOut, Monitor, ChevronRight, Zap, Trash2, Sliders, Bell
+  X, Volume2, Globe, Shield, User, Mail, Loader2, Check, Edit2,
+  Camera, LogOut, Monitor, Zap, Trash2
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { errorMessage } from '@/lib/errors';
+import { showToast } from '@/lib/toast';
+import type { UiUser } from '@/types/user';
+import { defaultAvatar } from '@/constants/app';
+import { useEscape } from '@/hooks/useEscape';
 
 type Lang = 'ru' | 'en';
 
 interface SettingsProps {
   isOpen: boolean;
   onClose: () => void;
-  user: any;
+  user: UiUser;
   currentLang: Lang;
   setLang: (lang: Lang) => void;
   onProfileUpdate: (updates: { name?: string; avatarUrl?: string }) => void;
@@ -23,17 +30,35 @@ const AVATAR_SEEDS = ['Felix', 'Aneka', 'Zack', 'Midnight', 'Luna', 'Shadow', 'G
 export default function Settings({ isOpen, onClose, user, currentLang, setLang, onProfileUpdate }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<'profile' | 'general' | 'account'>('profile');
   const [volume, setVolume] = useState(80);
+
+  // Load the saved volume
+  useEffect(() => {
+    const saved = localStorage.getItem('dg_volume');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage does not exist during SSR, so this cannot move into a lazy useState initializer
+    if (saved !== null && !isNaN(Number(saved))) setVolume(Number(saved));
+  }, []);
+
+  const handleVolumeChange = (v: number) => {
+    setVolume(v);
+    localStorage.setItem('dg_volume', String(v));
+  };
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [resetCooldown, setResetCooldown] = useState(0);
   const [customAvatars, setCustomAvatars] = useState<string[]>([]);
   const [username, setUsername] = useState('');
   const [isEditingName, setIsEditingName] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Close on Escape (the delete-confirm sub-dialog takes priority when open)
+  useEscape(isOpen && !pendingDelete, onClose);
+  useEscape(!!pendingDelete, () => setPendingDelete(null));
+
   useEffect(() => {
     if (user && user.name) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- seeds the editable name field from the loaded profile
       setUsername(user.name);
     }
   }, [user]);
@@ -42,13 +67,19 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
     if (!user || user.isAnonymous) return;
     const { data, error } = await supabase.storage.from('avatars').list('', { search: user.id });
     if (!error && data) {
-      const sorted = data.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      // created_at is nullable on a storage object. `new Date(null)` silently
+      // becomes the epoch, which would bury an undated upload at the bottom of
+      // the list instead of treating it as unknown — so guard it explicitly.
+      const uploadedAt = (file: { created_at: string | null }) =>
+        file.created_at ? new Date(file.created_at).getTime() : 0;
+      const sorted = [...data].sort((a, b) => uploadedAt(b) - uploadedAt(a));
       const urls = sorted.map(file => supabase.storage.from('avatars').getPublicUrl(file.name).data.publicUrl);
       setCustomAvatars(urls);
     }
   }, [user]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetchCustomAvatars is async; its setState runs after the storage call resolves, not synchronously
     if (isOpen) fetchCustomAvatars();
   }, [isOpen, fetchCustomAvatars]);
 
@@ -82,6 +113,10 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
       cancel: 'Отмена',
       logout: 'Выйти',
       deleteAvatar: 'Удалить',
+      deleteConfirmTitle: 'Удалить аватар?',
+      deleteConfirmDesc: 'Это действие нельзя отменить.',
+      cancelDelete: 'Отмена',
+      confirmDelete: 'Удалить',
       clickToEdit: 'Нажмите, чтобы изменить'
     },
     en: {
@@ -105,6 +140,10 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
       cancel: 'Cancel',
       logout: 'Logout',
       deleteAvatar: 'Delete',
+      deleteConfirmTitle: 'Delete avatar?',
+      deleteConfirmDesc: 'This action cannot be undone.',
+      cancelDelete: 'Cancel',
+      confirmDelete: 'Delete',
       clickToEdit: 'Click to edit'
     }
   }[currentLang];
@@ -122,13 +161,13 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
     }
     try {
       await supabase.auth.updateUser({ data: { username: username } });
-      if (!user.isAnonymous) {
-          await supabase.from('profiles').update({ username: username }).eq('id', user.id);
-      }
+      // Guests own their profile row as well (RLS checks auth.uid() = id);
+      // skipping them here is what left guest profiles stale.
+      await supabase.from('profiles').update({ username: username }).eq('id', user.id);
       onProfileUpdate({ name: username });
       setIsEditingName(false);
-    } catch (e: any) {
-      alert('Error: ' + e.message);
+    } catch (e: unknown) {
+      showToast('Error: ' + errorMessage(e), 'error');
     }
   };
 
@@ -136,17 +175,15 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
     try {
       onProfileUpdate({ avatarUrl: url });
       await supabase.auth.updateUser({ data: { avatar_url: url } });
-      if (!user.isAnonymous) {
-          await supabase.from('profiles').update({ avatar_url: url }).eq('id', user.id);
-      }
+      await supabase.from('profiles').update({ avatar_url: url }).eq('id', user.id);
     } catch (error) {
       console.error('Save failed', error);
     }
   };
 
-  // ВОССТАНОВЛЕННАЯ ФУНКЦИЯ
+  
   const handlePresetSelect = (seed: string) => {
-    saveAvatar(`https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}&backgroundColor=transparent`);
+    saveAvatar(defaultAvatar(seed));
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -155,7 +192,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
     setUploading(true);
     const file = e.target.files[0];
     if (file.size > 2 * 1024 * 1024) {
-        alert("File too large (max 2MB)");
+        showToast('File too large (max 2MB)', 'error');
         setUploading(false);
         return;
     }
@@ -168,19 +205,19 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
       const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
       await fetchCustomAvatars();
       await saveAvatar(data.publicUrl);
-    } catch (e: any) { alert(e.message); } finally { setUploading(false); }
+    } catch (e: unknown) { showToast(errorMessage(e), 'error'); } finally { setUploading(false); }
   };
 
-  const handleDeleteCustomAvatar = async (e: React.MouseEvent, url: string) => {
-    e.stopPropagation();
-    if (!confirm(t.deleteAvatar + '?')) return;
+  const confirmDeleteAvatar = async () => {
+    const url = pendingDelete;
+    setPendingDelete(null);
+    if (!url) return;
     const fileName = url.split('/').pop();
     if (!fileName) return;
     await supabase.storage.from('avatars').remove([fileName]);
     await fetchCustomAvatars();
     if (user.avatarUrl === url) {
-        const defaultAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}&backgroundColor=transparent`;
-        saveAvatar(defaultAvatar);
+        saveAvatar(defaultAvatar(user.id));
     }
   };
 
@@ -190,13 +227,18 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
     const redirectTo = `${baseUrl}/reset-password`;
     const { error } = await supabase.auth.resetPasswordForEmail(user.email, { redirectTo });
-    if (error) alert(error.message);
-    else { alert(t.resetSent); setResetCooldown(60); }
+    if (error) showToast(error.message, 'error');
+    else { showToast(t.resetSent, 'success'); setResetCooldown(60); }
     setLoading(false);
   };
 
-  return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-[#1A1F26]/40 backdrop-blur-xl animate-in fade-in duration-300 font-sans">
+  // Portal to <body>: the trigger lives inside blurred sticky headers whose
+  // backdrop-filter creates a containing block for position:fixed, which would
+  // otherwise clip this modal. document.body only exists on the client.
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-[#1A1F26]/40 backdrop-blur-xl animate-in fade-in duration-300 font-sans" onClick={onClose}>
       <div
         className="w-full max-w-5xl bg-white rounded-[40px] shadow-2xl shadow-black/20 border border-[#E6E1DC] overflow-hidden flex flex-col md:flex-row h-[680px] relative animate-in zoom-in-95 duration-300"
         onClick={(e) => e.stopPropagation()}
@@ -228,7 +270,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                onClick={() => setActiveTab(tab.id as 'profile' | 'general' | 'account')}
                 className={`
                   flex items-center gap-3 p-4 rounded-xl text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap relative group
                   ${activeTab === tab.id
@@ -246,7 +288,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
           <div className="mt-auto hidden md:block">
              <div className="p-4 rounded-2xl bg-white border border-[#E6E1DC] flex items-center gap-3 shadow-sm">
                   <div className="w-10 h-10 rounded-full bg-[#F8FAFC] border border-[#E6E1DC] overflow-hidden shrink-0">
-                      <img src={user.avatarUrl} className="w-full h-full object-cover" />
+                      <Image src={user.avatarUrl || "/logo512.png"} alt="Avatar" width={160} height={160} className="w-full h-full object-cover" />
                   </div>
                   <div className="min-w-0">
                       <div className="text-xs font-black text-[#1A1F26] truncate">{user.name}</div>
@@ -271,7 +313,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                         <div className="flex flex-col md:flex-row items-center gap-8 md:gap-12">
                             <div className="relative group cursor-pointer" onClick={() => !user.isAnonymous && fileInputRef.current?.click()}>
                                 <div className="w-32 h-32 md:w-40 md:h-40 rounded-[40px] border-4 border-[#F8FAFC] shadow-2xl overflow-hidden bg-[#F8FAFC] relative transition-transform group-hover:scale-[1.02]">
-                                    <img src={user.avatarUrl} className="w-full h-full object-cover" />
+                                    <Image src={user.avatarUrl || "/logo512.png"} alt="Avatar" width={160} height={160} className="w-full h-full object-cover" />
                                     {/* Overlay for upload */}
                                     {!user.isAnonymous && (
                                       <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[1px]">
@@ -345,10 +387,10 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                                                     onClick={() => saveAvatar(url)}
                                                     className={`w-full aspect-square rounded-2xl overflow-hidden border-2 transition-all duration-300 ${user.avatarUrl === url ? 'border-[#9e1316] ring-4 ring-[#9e1316]/10 scale-105' : 'border-transparent hover:border-[#E6E1DC] hover:scale-105 shadow-sm'}`}
                                                 >
-                                                    <img src={url} className="w-full h-full object-cover" />
+                                                    <Image src={url} alt="Custom avatar" width={96} height={96} className="w-full h-full object-cover" />
                                                 </button>
                                                 <button
-                                                    onClick={(e) => handleDeleteCustomAvatar(e, url)}
+                                                    onClick={(e) => { e.stopPropagation(); setPendingDelete(url); }}
                                                     className="absolute -top-2 -right-2 p-1.5 bg-white text-red-500 border border-red-100 rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-md hover:bg-red-50 transform hover:scale-110"
                                                 >
                                                     <Trash2 className="w-3.5 h-3.5" />
@@ -365,7 +407,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                                 </h3>
                                 <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-7 gap-3 md:gap-4">
                                     {AVATAR_SEEDS.map((seed) => {
-                                        const url = `https://api.dicebear.com/7.x/avataaars/svg?seed=${seed}&backgroundColor=transparent`;
+                                        const url = defaultAvatar(seed);
                                         const isSelected = user.avatarUrl === url;
                                         return (
                                             <button
@@ -373,7 +415,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                                                 onClick={() => handlePresetSelect(seed)}
                                                 className={`w-full aspect-square rounded-2xl overflow-hidden border-2 transition-all duration-300 ${isSelected ? 'border-[#9e1316] bg-white ring-4 ring-[#9e1316]/10 scale-105 shadow-lg' : 'border-[#F8FAFC] bg-[#F8FAFC] hover:border-[#E6E1DC] hover:bg-white hover:scale-105'}`}
                                             >
-                                                <img src={url} alt={seed} className="w-full h-full object-cover" />
+                                                <Image src={url} alt={seed} width={96} height={96} className="w-full h-full object-cover" />
                                             </button>
                                         );
                                     })}
@@ -426,7 +468,7 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                                     min="0"
                                     max="100"
                                     value={volume}
-                                    onChange={(e) => setVolume(Number(e.target.value))}
+                                    onChange={(e) => handleVolumeChange(Number(e.target.value))}
                                     className="w-full h-full opacity-0 cursor-pointer z-10"
                                  />
                              </div>
@@ -485,7 +527,41 @@ export default function Settings({ isOpen, onClose, user, currentLang, setLang, 
                 )}
             </div>
         </div>
+
+        {/* Delete-avatar confirmation (replaces the native confirm dialog) */}
+        {pendingDelete && (
+          <div
+            className="absolute inset-0 z-[60] flex items-center justify-center p-4 bg-[#1A1F26]/50 backdrop-blur-sm animate-in fade-in duration-200 rounded-[40px]"
+            onClick={() => setPendingDelete(null)}
+          >
+            <div
+              className="bg-white p-7 rounded-3xl w-full max-w-xs text-center shadow-2xl border border-[#E6E1DC] animate-in zoom-in-95"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-red-100">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-black text-[#1A1F26] uppercase mb-1">{t.deleteConfirmTitle}</h3>
+              <p className="text-xs font-bold text-[#8A9099] mb-6">{t.deleteConfirmDesc}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setPendingDelete(null)}
+                  className="flex-1 py-3 bg-[#F8FAFC] text-[#1A1F26] border border-[#E6E1DC] rounded-xl font-bold uppercase text-xs hover:bg-[#E6E1DC] transition-colors"
+                >
+                  {t.cancelDelete}
+                </button>
+                <button
+                  onClick={confirmDeleteAvatar}
+                  className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold uppercase text-xs hover:bg-red-600 transition-colors shadow-lg shadow-red-500/20"
+                >
+                  {t.confirmDelete}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

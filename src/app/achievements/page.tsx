@@ -1,64 +1,164 @@
 'use client';
 
+import Image from 'next/image';
 import React, { useEffect, useState, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
+import { COPYRIGHT } from '@/constants/app';
+import SettingsButton from '@/components/SettingsButton';
+import type { User as AuthUser } from '@supabase/supabase-js';
 import {
   ArrowLeft, Calendar, Trophy, Skull,
   Gamepad2, Medal, Clock, TrendingUp, Loader2, User, Star,
   Flag, Bomb, Zap, Fingerprint
 } from 'lucide-react';
 
-type Lang = 'ru' | 'en';
-
-// Базовая статистика одной категории
+// Base stats of a single category
 type BaseStats = {
     wins: number;
     lost: number;
-    time: number; // в минутах
-    extra?: number; // Доп. метрика (мины/флаги)
+    time: number; // in minutes
+    extra?: number; // Extra metric (mines/flags)
 };
 
-// Данные игры: могут быть плоскими или разделенными на режимы
+// Game data: either flat or split by mode
 type GameStatsData = BaseStats | {
     single?: BaseStats;
     multi?: BaseStats;
-    // Для совместимости со старым форматом
+    // For backward compatibility with the legacy format
     wins?: number;
     lost?: number;
     time?: number;
     extra?: number;
 };
 
-// Полная структура из БД
+// Full structure as stored in the DB
 type UserStats = {
     total_games: number;
     details: {
         minesweeper?: GameStatsData;
         flager?: GameStatsData;
-        battleship?: BaseStats; // Всегда плоский
-        coup?: BaseStats;       // Всегда плоский
-        spyfall?: BaseStats;    // Всегда плоский
+        battleship?: BaseStats; // Always flat
+        coup?: BaseStats;       // Always flat
+        spyfall?: BaseStats;    // Always flat
     }
+};
+
+
+// --- Hoisted to module scope (components must not be declared during render) ---
+
+interface TDict {
+    wins: string; losses: string; playTime: string; noStats: string;
+    modes: { single: string; multi: string };
+    extra: { minesweeper: string; flager: string };
+}
+
+const StatCard = ({ label, value, icon: Icon, color }: {
+    label: string; value: string | number; icon: React.ElementType; color: string;
+}) => (
+    <div className="bg-white p-5 rounded-3xl border border-[#E6E1DC] shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow group">
+        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${color} text-white shadow-md group-hover:scale-110 transition-transform`}>
+            <Icon className="w-6 h-6" />
+        </div>
+        <div>
+            <div className="text-[10px] font-bold text-[#8A9099] tracking-wider uppercase">{label}</div>
+            <div className="text-xl font-black text-[#1A1F26]">{value}</div>
+        </div>
+    </div>
+);
+
+const GameStatCard = ({ title, data, modeLabel, gameKey, t }: {
+    title: string; data: BaseStats; modeLabel?: string; gameKey: string; t: TDict;
+}) => {
+    const total = data.wins + data.lost;
+    const wr = total > 0 ? Math.round((data.wins / total) * 100) : 0;
+
+    const extraLabel = t.extra[gameKey as keyof typeof t.extra];
+    const ExtraIcon = gameKey === 'minesweeper' ? Bomb : (gameKey === 'flager' ? Flag : null);
+
+    return (
+      <div className="bg-white rounded-[32px] p-6 border border-[#E6E1DC] shadow-lg hover:shadow-xl transition-all group relative overflow-hidden flex flex-col justify-between">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-gray-100 to-transparent rounded-bl-[100px] pointer-events-none group-hover:from-[#9e1316]/5 transition-colors" />
+
+          <div className="flex justify-between items-start mb-6 relative z-10">
+              <div>
+                  <h3 className="text-xl font-black text-[#1A1F26] flex items-center gap-2">
+                      {gameKey === 'spyfall' && <Fingerprint className="w-5 h-5 text-[#9e1316]"/>}
+                      {title}
+                  </h3>
+                  {modeLabel && (
+                      <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded tracking-wider mt-1 inline-block ${modeLabel === t.modes.single ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
+                          {modeLabel}
+                      </span>
+                  )}
+              </div>
+              {total === 0 && <span className="text-[10px] font-bold bg-[#F5F5F0] text-[#8A9099] px-3 py-1 rounded-full tracking-wider">{t.noStats}</span>}
+          </div>
+
+          <div className={`grid grid-cols-2 gap-y-4 gap-x-2 relative z-10 ${total === 0 ? 'opacity-40 grayscale' : ''}`}>
+              <div>
+                  <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.wins}</div>
+                  <div className="text-xl font-black text-emerald-600 flex items-center gap-1">
+                      {data.wins} <Trophy className="w-3 h-3" />
+                  </div>
+              </div>
+              <div>
+                  <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.losses}</div>
+                  <div className="text-xl font-black text-red-500 flex items-center gap-1">
+                      {data.lost} <Skull className="w-3 h-3" />
+                  </div>
+              </div>
+              <div>
+                  <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.playTime}</div>
+                  <div className="text-xl font-black text-[#1A1F26] flex items-center gap-1">
+                      {Math.round(data.time)}m
+                  </div>
+              </div>
+
+              {extraLabel && ExtraIcon && (
+                  <div>
+                      <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{extraLabel}</div>
+                      <div className="text-xl font-black text-[#1A1F26] flex items-center gap-1">
+                          {data.extra || 0}
+                          <ExtraIcon className="w-3 h-3 text-[#9e1316]" />
+                      </div>
+                  </div>
+              )}
+          </div>
+
+          {total > 0 && (
+              <div className="mt-6 relative z-10">
+                  <div className="flex justify-between text-[9px] font-bold text-[#8A9099] mb-2">
+                      <span>Winrate</span>
+                      <span>{wr}%</span>
+                  </div>
+                  <div className="h-2 w-full bg-[#F5F5F0] rounded-full overflow-hidden">
+                      <div
+                          className="h-full bg-gradient-to-r from-[#9e1316] to-orange-500 transition-all duration-1000"
+                          style={{ width: `${wr}%` }}
+                      />
+                  </div>
+              </div>
+          )}
+      </div>
+    );
 };
 
 function AchievementsContent() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
 
   useEffect(() => {
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
-
     const fetchData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-          // Сохраняем текущий путь
+          // Remember the current path
           const currentPath = window.location.pathname + window.location.search;
-          // Перекидываем на главную, добавляя returnUrl
+          // Redirect to home with a returnUrl
           router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
           return;
       }
@@ -73,7 +173,7 @@ function AchievementsContent() {
       if (statsData) {
           setStats(statsData);
       } else {
-          // Инициализация нулями, если записи нет
+          // Initialize with zeros when no record exists
           setStats({
               total_games: 0,
               details: {
@@ -106,7 +206,7 @@ function AchievementsContent() {
       guest: 'Гость',
       guestDesc: 'Статистика не сохраняется',
       noStats: 'Нет данных',
-      footer: '© 2026 Darhaal Games Inc.',
+      footer: COPYRIGHT,
       modes: {
           single: 'Одиночный',
           multi: 'Мультиплеер'
@@ -138,7 +238,7 @@ function AchievementsContent() {
       guest: 'Guest',
       guestDesc: 'Stats not saved',
       noStats: 'No data',
-      footer: '© 2026 Darhaal Games Inc.',
+      footer: COPYRIGHT,
       modes: {
           single: 'Solo',
           multi: 'Multiplayer'
@@ -165,10 +265,11 @@ function AchievementsContent() {
 
   // --- Helpers for Aggregation ---
 
-  const getAggregatedStats = (gameData: any): BaseStats => {
-      if (!gameData) return { wins: 0, lost: 0, time: 0 };
+  const getAggregatedStats = (data: GameStatsData | undefined): BaseStats => {
+      if (!data) return { wins: 0, lost: 0, time: 0 };
+      const gameData = data as { single?: BaseStats; multi?: BaseStats } & Partial<BaseStats>;
 
-      // Если это новый формат с разделением
+      // New split-by-mode format
       if (gameData.single || gameData.multi) {
           const s = gameData.single || { wins: 0, lost: 0, time: 0 };
           const m = gameData.multi || { wins: 0, lost: 0, time: 0 };
@@ -179,7 +280,7 @@ function AchievementsContent() {
           };
       }
 
-      // Старый плоский формат
+      // Legacy flat format
       return {
           wins: gameData.wins || 0,
           lost: gameData.lost || 0,
@@ -192,7 +293,7 @@ function AchievementsContent() {
   let totalTime = 0;
 
   if (stats?.details) {
-      Object.values(stats.details).forEach((g: any) => {
+      Object.values(stats.details).forEach((g) => {
           const agg = getAggregatedStats(g);
           totalWins += agg.wins;
           totalLost += agg.lost;
@@ -203,96 +304,9 @@ function AchievementsContent() {
   const globalWinRate = totalWins + totalLost > 0 ? Math.round((totalWins / (totalWins + totalLost)) * 100) : 0;
   const hoursPlayed = Math.floor(totalTime / 60);
 
-  const StatCard = ({ label, value, icon: Icon, color }: any) => (
-      <div className="bg-white p-5 rounded-3xl border border-[#E6E1DC] shadow-sm flex items-center gap-4 hover:shadow-md transition-shadow group">
-          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${color} text-white shadow-md group-hover:scale-110 transition-transform`}>
-              <Icon className="w-6 h-6" />
-          </div>
-          <div>
-              <div className="text-[10px] font-bold text-[#8A9099] tracking-wider uppercase">{label}</div>
-              <div className="text-xl font-black text-[#1A1F26]">{value}</div>
-          </div>
-      </div>
-  );
-
-  const GameStatCard = ({ title, data, modeLabel, gameKey }: { title: string, data: BaseStats, modeLabel?: string, gameKey: string }) => {
-      const total = data.wins + data.lost;
-      const wr = total > 0 ? Math.round((data.wins / total) * 100) : 0;
-
-      const extraLabel = t.extra[gameKey as keyof typeof t.extra];
-      const ExtraIcon = gameKey === 'minesweeper' ? Bomb : (gameKey === 'flager' ? Flag : null);
-
-      return (
-        <div className="bg-white rounded-[32px] p-6 border border-[#E6E1DC] shadow-lg hover:shadow-xl transition-all group relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-gray-100 to-transparent rounded-bl-[100px] pointer-events-none group-hover:from-[#9e1316]/5 transition-colors" />
-
-            <div className="flex justify-between items-start mb-6 relative z-10">
-                <div>
-                    <h3 className="text-xl font-black text-[#1A1F26] flex items-center gap-2">
-                        {gameKey === 'spyfall' && <Fingerprint className="w-5 h-5 text-[#9e1316]"/>}
-                        {title}
-                    </h3>
-                    {modeLabel && (
-                        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded tracking-wider mt-1 inline-block ${modeLabel === t.modes.single ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
-                            {modeLabel}
-                        </span>
-                    )}
-                </div>
-                {total === 0 && <span className="text-[10px] font-bold bg-[#F5F5F0] text-[#8A9099] px-3 py-1 rounded-full tracking-wider">{t.noStats}</span>}
-            </div>
-
-            <div className={`grid grid-cols-2 gap-y-4 gap-x-2 relative z-10 ${total === 0 ? 'opacity-40 grayscale' : ''}`}>
-                <div>
-                    <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.wins}</div>
-                    <div className="text-xl font-black text-emerald-600 flex items-center gap-1">
-                        {data.wins} <Trophy className="w-3 h-3" />
-                    </div>
-                </div>
-                <div>
-                    <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.losses}</div>
-                    <div className="text-xl font-black text-red-500 flex items-center gap-1">
-                        {data.lost} <Skull className="w-3 h-3" />
-                    </div>
-                </div>
-                <div>
-                    <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{t.playTime}</div>
-                    <div className="text-xl font-black text-[#1A1F26] flex items-center gap-1">
-                        {Math.round(data.time)}m
-                    </div>
-                </div>
-
-                {extraLabel && ExtraIcon && (
-                    <div>
-                        <div className="text-[10px] font-bold text-[#8A9099] mb-1 uppercase tracking-wider">{extraLabel}</div>
-                        <div className="text-xl font-black text-[#1A1F26] flex items-center gap-1">
-                            {data.extra || 0}
-                            <ExtraIcon className="w-3 h-3 text-[#9e1316]" />
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            {total > 0 && (
-                <div className="mt-6 relative z-10">
-                    <div className="flex justify-between text-[9px] font-bold text-[#8A9099] mb-2">
-                        <span>Winrate</span>
-                        <span>{wr}%</span>
-                    </div>
-                    <div className="h-2 w-full bg-[#F5F5F0] rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-gradient-to-r from-[#9e1316] to-orange-500 transition-all duration-1000"
-                            style={{ width: `${wr}%` }}
-                        />
-                    </div>
-                </div>
-            )}
-        </div>
-      );
-  };
-
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-[#1A1F26] overflow-x-hidden selection:bg-[#9e1316] selection:text-white flex flex-col">
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
 
       {/* HEADER: STICKY */}
       <header className="sticky top-0 z-30 w-full bg-[#F8FAFC]/90 backdrop-blur-xl border-b border-[#E6E1DC] shadow-sm">
@@ -306,7 +320,9 @@ function AchievementsContent() {
                 <p className="text-xs text-[#8A9099] font-medium hidden sm:block">{t.headerSub}</p>
             </div>
           </div>
-          <div className="hidden md:block w-32" />
+          <div className="flex justify-end">
+            <SettingsButton />
+          </div>
         </div>
       </header>
 
@@ -315,7 +331,7 @@ function AchievementsContent() {
           <div className="flex flex-col md:flex-row items-center gap-8 mb-12 animate-in slide-in-from-bottom-8 duration-500">
               <div className="w-32 h-32 md:w-40 md:h-40 rounded-full border-4 border-white shadow-2xl overflow-hidden bg-[#F5F5F0] relative group ring-4 ring-[#E6E1DC]/50">
                   {user.user_metadata?.avatar_url ? (
-                      <img src={user.user_metadata.avatar_url} className="w-full h-full object-cover" />
+                      <Image src={user.user_metadata.avatar_url} alt="Avatar" width={160} height={160} className="w-full h-full object-cover" />
                   ) : (
                       <User className="w-16 h-16 text-gray-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                   )}
@@ -358,12 +374,12 @@ function AchievementsContent() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-bottom-12 duration-700 delay-200">
               {['minesweeper', 'flager', 'battleship', 'coup', 'spyfall'].map((gameKey) => {
-                  const data: any = stats?.details?.[gameKey as keyof typeof stats.details];
+                  const data = stats?.details?.[gameKey as keyof typeof stats.details] as (BaseStats & { single?: BaseStats; multi?: BaseStats }) | undefined;
                   const gameName = t.gamesNames[gameKey as keyof typeof t.gamesNames];
 
-                  if (!data) return <GameStatCard key={gameKey} title={gameName} data={{ wins: 0, lost: 0, time: 0 }} gameKey={gameKey} />;
+                  if (!data) return <GameStatCard key={gameKey} title={gameName} data={{ wins: 0, lost: 0, time: 0 }} gameKey={gameKey} t={t} />;
 
-                  // Если данные имеют структуру single/multi (Сапер, Флагер)
+                  // Data split into single/multi (Minesweeper, Flager)
                   if (data.single || data.multi) {
                       return (
                           <React.Fragment key={gameKey}>
@@ -372,19 +388,21 @@ function AchievementsContent() {
                                   modeLabel={t.modes.single}
                                   data={data.single || { wins: 0, lost: 0, time: 0 }}
                                   gameKey={gameKey}
+                                  t={t}
                               />
                               <GameStatCard
                                   title={gameName}
                                   modeLabel={t.modes.multi}
                                   data={data.multi || { wins: 0, lost: 0, time: 0 }}
                                   gameKey={gameKey}
+                                  t={t}
                               />
                           </React.Fragment>
                       );
                   }
 
-                  // Стандартный (плоский) вид для Coup/Battleship/Spyfall
-                  return <GameStatCard key={gameKey} title={gameName} data={data} gameKey={gameKey} />;
+                  // Standard (flat) view for Coup/Battleship/Spyfall
+                  return <GameStatCard key={gameKey} title={gameName} data={data} gameKey={gameKey} t={t} />;
               })}
           </div>
       </main>

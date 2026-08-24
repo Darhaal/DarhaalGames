@@ -3,12 +3,12 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
 import { Loader2 } from 'lucide-react';
 import UniversalLobby, { LobbyPlayer } from '@/components/UniversalLobby';
 import { useMinesweeperGame } from '@/hooks/useMinesweeperGame';
 import MinesweeperGame from '@/components/MinesweeperGame';
-
-type Lang = 'ru' | 'en';
+import GameNotJoined from '@/components/GameNotJoined';
 
 const UI_TEXT = {
   ru: {
@@ -36,7 +36,7 @@ function MinesweeperContent() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [isLeaving, setIsLeaving] = useState(false);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
 
   // Auth Check Effect
   useEffect(() => {
@@ -47,7 +47,7 @@ function MinesweeperContent() {
           setUserName(data.user.user_metadata?.username || 'Player');
           setUserAvatar(data.user.user_metadata?.avatar_url || '');
       } else {
-          // Если нет юзера - редирект с сохранением пути
+          // No user — redirect while preserving the path
           const currentPath = window.location.pathname + window.location.search;
           router.push(`/?returnUrl=${encodeURIComponent(currentPath)}`);
       }
@@ -55,8 +55,6 @@ function MinesweeperContent() {
     };
 
     checkUser();
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
   }, [router]);
 
   const {
@@ -64,9 +62,9 @@ function MinesweeperContent() {
     initGame, startGame, revealCell, toggleFlag, chordCell, leaveGame, handleTimeout
   } = useMinesweeperGame(lobbyId, userId);
 
-  // Инициализация игрока при входе
+  // Register the player on entry (only while the lobby is waiting)
   useEffect(() => {
-      if (userId && gameState && !gameState.players[userId]) {
+      if (userId && gameState && gameState.status === 'waiting' && !gameState.players[userId]) {
           initGame({ name: userName, avatarUrl: userAvatar });
       }
   }, [userId, gameState, userName, userAvatar, initGame]);
@@ -82,7 +80,7 @@ function MinesweeperContent() {
 
   if (authLoading || loading || isLeaving) return <div className="min-h-screen flex items-center justify-center bg-[#F8FAFC]"><Loader2 className="animate-spin text-[#9e1316] w-8 h-8" /></div>;
 
-  if (!userId) return null; // Ждем редиректа
+  if (!userId) return null; // Waiting for the redirect
 
   if (lobbyDeleted) {
     return (
@@ -96,6 +94,11 @@ function MinesweeperContent() {
   }
 
   if (!gameState) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-400">{t.lobbyNotFound}</div>;
+
+  // Late visitor: the game is already running and we are not part of it
+  if (gameState.status !== 'waiting' && !gameState.players[userId]) {
+      return <GameNotJoined lang={lang} />;
+  }
 
   if (gameState.status === 'waiting') {
       const playersList: LobbyPlayer[] = Object.values(gameState.players).map(p => ({

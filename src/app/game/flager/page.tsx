@@ -3,12 +3,12 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
 import { Loader2 } from 'lucide-react';
 import UniversalLobby, { LobbyPlayer } from '@/components/UniversalLobby';
 import { useFlagerGame } from '@/hooks/useFlagerGame';
 import FlagerGame from '@/components/FlagerGame';
-
-type Lang = 'ru' | 'en';
+import GameNotJoined from '@/components/GameNotJoined';
 
 const UI_TEXT = {
   ru: {
@@ -36,7 +36,7 @@ function FlagerContent() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [isLeaving, setIsLeaving] = useState(false);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
 
   useEffect(() => {
     const checkUser = async () => {
@@ -53,8 +53,6 @@ function FlagerContent() {
     };
     checkUser();
 
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
   }, [router]);
 
   const {
@@ -63,7 +61,7 @@ function FlagerContent() {
   } = useFlagerGame(lobbyId, userId);
 
   useEffect(() => {
-      if (userId && gameState && !gameState.players.find(p => p.id === userId)) {
+      if (userId && gameState && gameState.status === 'waiting' && !gameState.players.find(p => p.id === userId)) {
           initGame({ name: userName, avatarUrl: userAvatar });
       }
   }, [userId, gameState, initGame, userName, userAvatar]);
@@ -93,6 +91,11 @@ function FlagerContent() {
   }
 
   if (!gameState) return <div className="min-h-screen flex items-center justify-center font-bold text-gray-400">{t.lobbyNotFound}</div>;
+
+  // Late visitor: the game is already running and we are not part of it
+  if (gameState.status !== 'waiting' && !gameState.players.find(p => p.id === userId)) {
+      return <GameNotJoined lang={lang} />;
+  }
 
   if (gameState.status === 'waiting') {
       const playersList: LobbyPlayer[] = gameState.players.map(p => ({

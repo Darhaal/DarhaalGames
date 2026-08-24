@@ -6,7 +6,7 @@ export type CountryData = {
   code: string;
   continent: string;
   flagPath: string;
-  aliases?: string[]; // Синонимы для поиска
+  aliases?: string[]; // Search aliases
 };
 
 const getFlagUrl = (code: string) => `https://flagcdn.com/w640/${code.toLowerCase()}.png`;

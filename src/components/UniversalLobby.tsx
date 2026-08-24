@@ -1,13 +1,16 @@
 'use client';
 
+import Image from 'next/image';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   LogOut, Crown, Copy, Check, Users, ScrollText, Ship,
-  Bomb, Fingerprint, ShieldAlert, Skull, User, Play, Flag,
-  Wifi, WifiOff, XCircle, AlertCircle, Loader2
+  Bomb, Fingerprint, User, Play, Flag,
+  Wifi, WifiOff, XCircle
 } from 'lucide-react';
 import { usePresenceHeartbeat } from '@/hooks/usePresenceHeartbeat';
 import { supabase } from '@/lib/supabase';
+import { writeGameState } from '@/lib/gameStateSync';
+import { playSfx } from '@/lib/sound';
 
 export interface LobbyPlayer {
   id: string;
@@ -30,15 +33,12 @@ interface UniversalLobbyProps {
   lang: 'ru' | 'en';
 }
 
-const GAME_ICONS: Record<string, any> = {
+const GAME_ICONS: Record<string, React.ElementType> = {
   coup: ScrollText,
   battleship: Ship,
   flager: Flag,
-  mafia: Users,
   minesweeper: Bomb,
-  bunker: ShieldAlert,
   spyfall: Fingerprint,
-  secret_hitler: Skull,
 };
 
 const Toast = ({ msg, type }: { msg: string, type: 'join' | 'leave' | 'info' }) => (
@@ -63,14 +63,23 @@ export default function UniversalLobby({
   const [notifications, setNotifications] = useState<{ id: number; msg: string; type: 'join' | 'leave' | 'info' }[]>([]);
   const prevPlayersRef = useRef<LobbyPlayer[]>(players);
 
-  // Таймеры для отслеживания оффлайн игроков перед авто-киком (id -> timestamp удаления)
+  // Timers tracking offline players before auto-kick (id -> removal timestamp)
   const [kickTimers, setKickTimers] = useState<Record<string, number>>({});
+  // Clock tick for the countdown display (avoids calling Date.now() during render)
+  const [nowTick, setNowTick] = useState(0);
 
-  // Подключение Presence
+  // Presence connection
   const { onlineUserIds, isSynced } = usePresenceHeartbeat(roomCode, currentUserId);
 
   const isHost = players.find(p => p.id === currentUserId)?.isHost;
   const GameIcon = GAME_ICONS[gameType] || Users;
+
+  const addNotification = (msg: string, type: 'join' | 'leave' | 'info') => {
+      playSfx('notify');
+      const id = Date.now();
+      setNotifications(prev => [...prev, { id, msg, type }]);
+      setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
+  };
 
   const t = {
     ru: {
@@ -109,7 +118,7 @@ export default function UniversalLobby({
     }
   }[lang];
 
-  // Уведомления о входе/выходе (визуальные)
+  // Join/leave notifications (visual)
   useEffect(() => {
       const prev = prevPlayersRef.current;
       const current = players;
@@ -129,35 +138,111 @@ export default function UniversalLobby({
       prevPlayersRef.current = current;
   }, [players, t]);
 
-  // --- АВТО-КИК СИСТЕМА (Работает только у Хоста) ---
+  const handleCopy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(roomCode);
+      } else {
+        // Fallback for legacy browsers / insecure contexts
+        const textArea = document.createElement("textarea");
+        textArea.value = roomCode;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+    } catch (err) {
+      console.error('Copy failed', err);
+    }
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleKickPlayer = async (targetId: string) => {
+    if (!isHost) return;
+
+    try {
+      // 1. Fetch the FRESH state from the DB (critical to avoid remove-then-restore races)
+      const { data, error } = await supabase
+        .from('lobbies')
+        .select('id, game_state')
+        .eq('code', roomCode)
+        .single();
+
+      if (error || !data) return;
+
+      const currentState = data.game_state as { players: LobbyPlayer[] | Record<string, LobbyPlayer>; version?: number } & Record<string, unknown>;
+      let newPlayers = currentState.players;
+      let playersCount = 0;
+
+      // 2. Remove the player according to the data shape
+      if (Array.isArray(newPlayers)) {
+        // Array (Spyfall, Coup, Flager)
+        newPlayers = newPlayers.filter((p) => p.id !== targetId);
+        playersCount = newPlayers.length;
+      } else if (typeof newPlayers === 'object') {
+        // Record (Battleship, Minesweeper)
+        const updatedPlayers = { ...newPlayers };
+        delete updatedPlayers[targetId];
+        newPlayers = updatedPlayers;
+        playersCount = Object.keys(newPlayers).length;
+      }
+
+      // 3. If no players remain — delete the lobby, otherwise update it
+      if (playersCount === 0) {
+          // Deletion goes through leave_lobby (SECURITY DEFINER): the table
+          // grants no delete privilege to clients.
+          await supabase.rpc('leave_lobby', { p_lobby_id: data.id });
+          onLeave(); // Leave ourselves since the lobby is destroyed
+      } else {
+          // CAS write through the shared helper (protects against racing writes)
+          await writeGameState(data.id as string, {
+              ...currentState,
+              players: newPlayers,
+              version: (currentState.version || 0) + 1
+          });
+
+          // Local notification only for a manual kick (not auto)
+          if (!kickTimers[targetId]) {
+             addNotification(t.kicked, 'info');
+          }
+      }
+
+    } catch (e) {
+      console.error("Kick failed", e);
+    }
+  };
+
+  // --- AUTO-KICK SYSTEM (runs on the host only) ---
   useEffect(() => {
-    // Работаем только если мы хост и синхронизация Presence завершена
+    // Only run when we are the host and Presence has synced
     if (!isHost || !isSynced) return;
 
     const interval = setInterval(() => {
       const now = Date.now();
+      setNowTick(now);
       const newTimers = { ...kickTimers };
       let changed = false;
 
       players.forEach(p => {
-        if (p.id === currentUserId) return; // Себя не кикаем
+        if (p.id === currentUserId) return; // Never kick ourselves
 
-        // Игрок оффлайн?
+        // Is the player offline?
         const isOffline = !onlineUserIds.includes(p.id);
 
         if (isOffline) {
           if (!newTimers[p.id]) {
-            // Начало таймера (10 секунд на переподключение)
+            // Start the timer (10 seconds to reconnect)
             newTimers[p.id] = now + 10000;
             changed = true;
           } else if (now > newTimers[p.id]) {
-            // Время вышло - кикаем
+            // Time is up — kick
             handleKickPlayer(p.id);
-            delete newTimers[p.id]; // Удаляем таймер, чтобы не спамить запросами
+            delete newTimers[p.id]; // Drop the timer so we do not spam requests
             changed = true;
           }
         } else {
-          // Игрок онлайн - сбрасываем таймер, если он был
+          // Player is online — clear the timer if any
           if (newTimers[p.id]) {
             delete newTimers[p.id];
             changed = true;
@@ -165,7 +250,7 @@ export default function UniversalLobby({
         }
       });
 
-      // Очистка таймеров для игроков, которых уже нет в списке
+      // Clean up timers for players no longer in the list
       Object.keys(newTimers).forEach(id => {
         if (!players.find(p => p.id === id)) {
           delete newTimers[id];
@@ -177,86 +262,13 @@ export default function UniversalLobby({
     }, 1000);
 
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the interval reads currentUserId/handleKickPlayer via a fresh closure; adding them would recreate the interval each tick
   }, [isHost, isSynced, players, onlineUserIds, kickTimers]);
 
-  const addNotification = (msg: string, type: 'join' | 'leave' | 'info') => {
-      const id = Date.now();
-      setNotifications(prev => [...prev, { id, msg, type }]);
-      setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 4000);
-  };
-
-  const handleCopy = () => {
-    // Fallback для копирования
-    const textArea = document.createElement("textarea");
-    textArea.value = roomCode;
-    document.body.appendChild(textArea);
-    textArea.select();
-    try {
-      document.execCommand('copy');
-      setCopied(true);
-    } catch (err) {
-      console.error('Copy failed', err);
-    }
-    document.body.removeChild(textArea);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleKickPlayer = async (targetId: string) => {
-    if (!isHost) return;
-
-    try {
-      // 1. Получаем СВЕЖЕЕ состояние из БД (критично для избежания рейсов "удаляет-возвращает")
-      const { data, error } = await supabase
-        .from('lobbies')
-        .select('game_state')
-        .eq('code', roomCode)
-        .single();
-
-      if (error || !data) return;
-
-      const currentState = data.game_state;
-      let newPlayers: any = currentState.players;
-      let playersCount = 0;
-
-      // 2. Удаляем игрока в зависимости от структуры данных
-      if (Array.isArray(newPlayers)) {
-        // Массив (Spyfall, Coup, Flager)
-        newPlayers = newPlayers.filter((p: any) => p.id !== targetId);
-        playersCount = newPlayers.length;
-      } else if (typeof newPlayers === 'object') {
-        // Объект (Battleship, Minesweeper)
-        const updatedPlayers = { ...newPlayers };
-        delete updatedPlayers[targetId];
-        newPlayers = updatedPlayers;
-        playersCount = Object.keys(newPlayers).length;
-      }
-
-      // 3. Если игроков не осталось - удаляем лобби, иначе обновляем
-      if (playersCount === 0) {
-          await supabase.from('lobbies').delete().eq('code', roomCode);
-          onLeave(); // Выходим сами, так как лобби уничтожено
-      } else {
-          await supabase
-            .from('lobbies')
-            .update({
-              game_state: { ...currentState, players: newPlayers, version: (currentState.version || 0) + 1 }
-            })
-            .eq('code', roomCode);
-
-          // Локальное уведомление только если кикнули вручную (не авто)
-          if (!kickTimers[targetId]) {
-             addNotification(t.kicked, 'info');
-          }
-      }
-
-    } catch (e) {
-      console.error("Kick failed", e);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans relative overflow-hidden">
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
 
       <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 w-full max-w-sm px-4 pointer-events-none">
           {notifications.map(n => (
@@ -298,19 +310,19 @@ export default function UniversalLobby({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {players.map(p => {
-              // Игрок онлайн, если он есть в Presence или если это я сам (пока синхронизация идет)
+              // A player is online if present in Presence, or if it is me (while sync is in progress)
               const isOnline = !isSynced || onlineUserIds.includes(p.id) || p.id === currentUserId;
               const isMe = p.id === currentUserId;
 
-              // Время до кика (если таймер запущен)
-              const kickTime = kickTimers[p.id] ? Math.ceil((kickTimers[p.id] - Date.now()) / 1000) : null;
+              // Time until kick (if the timer is running)
+              const kickTime = kickTimers[p.id] && nowTick ? Math.ceil((kickTimers[p.id] - nowTick) / 1000) : null;
 
               return (
                 <div key={p.id} className={`group relative p-4 rounded-2xl border flex items-center justify-between gap-4 transition-all ${isOnline ? 'bg-[#F8FAFC] border-[#E6E1DC] hover:border-[#9e1316]/30 hover:shadow-md' : 'bg-red-50 border-red-100 opacity-90'}`}>
                   <div className="flex items-center gap-4 min-w-0">
                       <div className="relative">
                           <div className="w-14 h-14 rounded-full bg-white border-2 border-white shadow-sm overflow-hidden bg-[#F5F5F0]">
-                              {p.avatarUrl ? <img src={p.avatarUrl} alt={p.name} className={`w-full h-full object-cover ${!isOnline ? 'grayscale' : ''}`} /> : <User className="w-8 h-8 text-gray-400 m-auto mt-3" />}
+                              {p.avatarUrl ? <Image src={p.avatarUrl} alt={p.name} width={56} height={56} className={`w-full h-full object-cover ${!isOnline ? 'grayscale' : ''}`} /> : <User className="w-8 h-8 text-gray-400 m-auto mt-3" />}
                           </div>
                           {p.isHost && (
                               <div className="absolute -top-1 -right-1 bg-[#9e1316] text-white p-1 rounded-full border-2 border-white shadow-sm z-10" title={t.host}>
@@ -337,7 +349,7 @@ export default function UniversalLobby({
                       </div>
                   </div>
 
-                  {/* Кнопка кика: только для Хоста и только не для себя */}
+                  {/* Kick button: host only, never for yourself */}
                   {isHost && !isMe && (
                       <button
                         onClick={() => handleKickPlayer(p.id)}

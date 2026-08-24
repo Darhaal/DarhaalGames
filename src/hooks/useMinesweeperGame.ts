@@ -1,179 +1,46 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import { MinesweeperState, MinesweeperPlayer, Cell } from '@/types/minesweeper';
+import { MinesweeperState, MinesweeperPlayer } from '@/types/minesweeper';
 import { updatePlayerStats } from '@/lib/playerStats';
+import { useLobbySync } from '@/hooks/core/useLobbySync';
+import { generateEmptyBoard, placeMines, openCellIterative, chordCell as chordCellLogic } from '@/lib/gameLogic/minesweeper';
 
-// --- ГЕНЕРАТОРЫ ---
-const getNeighbors = (x: number, y: number, width: number, height: number) => {
-  const neighbors = [];
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dy = -1; dy <= 1; dy++) {
-      if (dx === 0 && dy === 0) continue;
-      const nx = x + dx;
-      const ny = y + dy;
-      if (nx >= 0 && nx < width && ny >= 0 && ny < height) neighbors.push({ x: nx, y: ny });
-    }
-  }
-  return neighbors;
-};
-
-const generateEmptyBoard = (width: number, height: number): Cell[][] => {
-  const board: Cell[][] = [];
-  for (let y = 0; y < height; y++) {
-    const row: Cell[] = [];
-    for (let x = 0; x < width; x++) {
-      row.push({ x, y, isMine: false, isOpen: false, isFlagged: false, neighborCount: 0 });
-    }
-    board.push(row);
-  }
-  return board;
-};
-
-const placeMines = (board: Cell[][], width: number, height: number, minesCount: number, safeX: number, safeY: number) => {
-  let minesPlaced = 0;
-  const safeZone = new Set<string>();
-  // Безопасная зона 3x3 вокруг первого клика
-  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) safeZone.add(`${safeX + dx},${safeY + dy}`);
-
-  let attempts = 0;
-  while (minesPlaced < minesCount && attempts < width * height * 10) {
-    const x = Math.floor(Math.random() * width);
-    const y = Math.floor(Math.random() * height);
-    if (!board[y][x].isMine && !safeZone.has(`${x},${y}`)) {
-      board[y][x].isMine = true;
-      minesPlaced++;
-    }
-    attempts++;
-  }
-
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    if (!board[y][x].isMine) {
-      const neighbors = getNeighbors(x, y, width, height);
-      let count = 0;
-      neighbors.forEach(n => { if (board[n.y][n.x].isMine) count++; });
-      board[y][x].neighborCount = count;
-    }
-  }
-};
-
-// Итеративный подход вместо рекурсии (защита от Stack Overflow)
-const openCellIterative = (board: Cell[][], startX: number, startY: number, width: number, height: number) => {
-    const stack = [{ x: startX, y: startY }];
-
-    while (stack.length > 0) {
-        const { x, y } = stack.pop()!;
-
-        if (x < 0 || x >= width || y < 0 || y >= height) continue;
-        const cell = board[y][x];
-
-        if (cell.isOpen || cell.isFlagged) continue;
-
-        cell.isOpen = true;
-
-        if (cell.neighborCount === 0) {
-            const neighbors = getNeighbors(x, y, width, height);
-            for (const n of neighbors) {
-                if (!board[n.y][n.x].isOpen && !board[n.y][n.x].isFlagged) {
-                    stack.push(n);
-                }
-            }
-        }
-    }
+const countMoves = (p: MinesweeperPlayer) => {
+    let moves = 0;
+    for (const r of p.board) for (const c of r) if (c.isOpen || c.isFlagged) moves++;
+    return moves;
 };
 
 export function useMinesweeperGame(lobbyId: string | null, userId: string | undefined) {
-  const [gameState, setGameState] = useState<MinesweeperState | null>(null);
-  const [roomMeta, setRoomMeta] = useState<{ name: string; code: string; isHost: boolean } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lobbyDeleted, setLobbyDeleted] = useState(false);
+  const {
+    gameState, setGameState, gameStateRef,
+    roomMeta, loading, lobbyDeleted,
+    updateState, deleteLobby
+  } = useLobbySync<MinesweeperState>({
+    lobbyId,
+    userId,
+    channelPrefix: 'lobby-mines',
+    // Preserve local board progress when the server lags (anti-lag),
+    // but accept the server state on game end/timeout
+    mergeIncoming: (prev, incoming) => {
+      if (incoming.status === 'waiting') return incoming;
 
-  const stateRef = useRef<{ lobbyId: string | null; userId: string | undefined; gameState: MinesweeperState | null }>({
-    lobbyId, userId, gameState: null
-  });
+      const prevVersion = prev?.version || 0;
+      const newVersion = incoming.version || 0;
+      if (prev && newVersion < prevVersion && incoming.status === 'playing') return prev;
 
-  useEffect(() => {
-    stateRef.current = { lobbyId, userId, gameState };
-  }, [lobbyId, userId, gameState]);
+      if (prev && userId && incoming.status === 'playing') {
+        const myPrev = prev.players[userId];
+        const myIncoming = incoming.players[userId];
 
-  // --- SYNC ---
-  const fetchLobbyState = useCallback(async () => {
-    if (!lobbyId) return;
-    try {
-      const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
-      if (data) {
-        setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === userId });
-        if (data.game_state) setGameState(data.game_state);
-      } else {
-        setGameState(null);
-        setLobbyDeleted(true);
-      }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [lobbyId, userId]);
-
-  useEffect(() => {
-    if (!lobbyId) return;
-    fetchLobbyState();
-
-    const ch = supabase.channel(`lobby-mines:${lobbyId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      (payload) => {
-          if (payload.new.game_state) {
-            setGameState(prev => {
-                const incoming = payload.new.game_state as MinesweeperState;
-                if (incoming.status === 'waiting') return incoming;
-
-                const prevVersion = prev?.version || 0;
-                const newVersion = incoming.version || 0;
-
-                // Всегда принимаем, если версия новее ИЛИ если игра закончилась (критическое обновление)
-                if (prev && newVersion < prevVersion && incoming.status === 'playing') return prev;
-
-                if (prev && userId && incoming.status === 'playing') {
-                    const myPrev = prev.players[userId];
-                    const myIncoming = incoming.players[userId];
-
-                    if (myPrev && myIncoming && myPrev.status !== 'left') {
-                        const countMoves = (p: MinesweeperPlayer) => {
-                            let moves = 0;
-                            for(let r of p.board) for(let c of r) if(c.isOpen || c.isFlagged) moves++;
-                            return moves;
-                        };
-                        const localMoves = countMoves(myPrev);
-                        const serverMoves = countMoves(myIncoming);
-
-                        // BUGFIX: Если сервер прислал, что игра окончена (таймаут) или я проиграл/выиграл - принимаем это состояние,
-                        // даже если локально мы "сделали больше ходов" (накликивая в лаге).
-                        if (localMoves > serverMoves && incoming.status === 'playing' && myIncoming.status === 'playing') {
-                             return {
-                                 ...incoming,
-                                 players: { ...incoming.players, [userId]: myPrev }
-                             };
-                        }
-                    }
-                }
-                return incoming;
-            });
+        if (myPrev && myIncoming && myPrev.status !== 'left') {
+          if (countMoves(myPrev) > countMoves(myIncoming) && myIncoming.status === 'playing') {
+            return { ...incoming, players: { ...incoming.players, [userId]: myPrev } };
           }
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      () => { setGameState(null); setLobbyDeleted(true); })
-      .subscribe();
-
-    return () => { supabase.removeChannel(ch); };
-  }, [lobbyId, fetchLobbyState, userId]);
-
-  const updateState = async (newState: MinesweeperState) => {
-    newState.version = (newState.version || 0) + 1;
-    newState.lastActionTime = Date.now();
-    setGameState(newState);
-
-    if (stateRef.current.lobbyId) {
-       await supabase.from('lobbies').update({
-           game_state: newState,
-           status: newState.status
-       }).eq('id', stateRef.current.lobbyId);
+        }
+      }
+      return incoming;
     }
-  };
+  });
 
   const handleGameEndCheck = (newState: MinesweeperState, player: MinesweeperPlayer) => {
       const currentTime = Math.floor((Date.now() - newState.startTime) / 1000);
@@ -192,15 +59,18 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
       const isWin = (opened === totalCells - newState.settings.minesCount) ||
                     (totalFlagged === newState.settings.minesCount && correctlyFlagged === newState.settings.minesCount);
 
-      const isAlreadyEnded = player.status === 'won' || player.status === 'lost';
+      // IMPORTANT: all callers (revealCell/toggleFlag/chordCell/handleTimeout) invoke this
+      // check only for a player who was 'playing' before the action. A 'lost' status here
+      // therefore means the loss happened just now and must be processed.
       const playerCount = Object.keys(newState.players).length;
       const mode = playerCount > 1 ? 'multi' : 'single';
 
-      if (isWin && !isAlreadyEnded) {
+      if (isWin && player.status === 'playing') {
           player.status = 'won';
           player.score = currentTime;
           newState.status = 'finished';
           newState.winner = player.name;
+          newState.winnerId = player.id;
 
           if (userId && player.id === userId) {
               updatePlayerStats(userId, {
@@ -213,7 +83,7 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
           }
       }
 
-      if (player.status === 'lost' && !isAlreadyEnded) {
+      if (player.status === 'lost') {
           player.score = currentTime;
           const active = Object.values(newState.players).filter(p => p.status === 'playing');
           if (active.length === 0) newState.status = 'finished';
@@ -261,7 +131,7 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
   };
 
   const startGame = async () => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs) return;
 
     const newState: MinesweeperState = JSON.parse(JSON.stringify(currentGs));
@@ -279,18 +149,23 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
     await updateState(newState);
   };
 
+  // Every player owns their own board, but all boards live in one row behind a
+  // single version counter — so two players clicking at the same moment used to
+  // collide and one click was dropped. These actions are written as functions of
+  // the current state so a conflict can be rebuilt on fresh state and retried.
   const revealCell = async (x: number, y: number) => {
-      const currentGs = stateRef.current.gameState;
-      if (!currentGs || !userId || currentGs.status !== 'playing') return;
-      const newState = JSON.parse(JSON.stringify(currentGs));
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      const newState: MinesweeperState = JSON.parse(JSON.stringify(current));
       const player = newState.players[userId];
 
-      if (!player || player.status !== 'playing') return;
-      if (player.board[y][x].isOpen || player.board[y][x].isFlagged) return;
+      if (!player || player.status !== 'playing') return null;
+      if (player.board[y][x].isOpen || player.board[y][x].isFlagged) return null;
 
-      // Оптимизация: вместо полного прохода массива, можно хранить флаг hasStarted в player
-      // но для совместимости оставим так, это быстро на клиенте
-      const isFirstMove = player.board.flat().every((c:any) => !c.isOpen);
+      // Optimization note: a hasStarted flag on the player would avoid the full scan,
+      // but this is fast on the client and kept for compatibility
+      const isFirstMove = player.board.flat().every((c) => !c.isOpen);
       if (isFirstMove) {
           placeMines(player.board, newState.settings.width, newState.settings.height, newState.settings.minesCount, x, y);
       }
@@ -300,90 +175,83 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
       if (cell.isMine) {
           cell.isOpen = true;
           player.status = 'lost';
-          // Показать все мины
-          player.board.forEach((r:any) => r.forEach((c:any) => { if (c.isMine) c.isOpen = true; }));
+          // Reveal all mines
+          player.board.forEach((r) => r.forEach((c) => { if (c.isMine) c.isOpen = true; }));
       } else {
-          // Используем итеративный подход
+          // Iterative approach
           openCellIterative(player.board, x, y, newState.settings.width, newState.settings.height);
       }
 
       handleGameEndCheck(newState, player);
-      await updateState(newState);
+      return newState;
+    });
   };
 
   const toggleFlag = async (x: number, y: number) => {
-      const currentGs = stateRef.current.gameState;
-      if (!currentGs || !userId || currentGs.status !== 'playing') return;
-      const newState = JSON.parse(JSON.stringify(currentGs));
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      const newState: MinesweeperState = JSON.parse(JSON.stringify(current));
       const player = newState.players[userId];
 
-      if (!player || player.status !== 'playing') return;
+      if (!player || player.status !== 'playing') return null;
       const cell = player.board[y][x];
+      if (cell.isOpen) return null; // nothing to toggle — no state write
 
-      if (!cell.isOpen) {
-          cell.isFlagged = !cell.isFlagged;
-          player.minesLeft += cell.isFlagged ? -1 : 1;
-      }
+      cell.isFlagged = !cell.isFlagged;
+      player.minesLeft += cell.isFlagged ? -1 : 1;
+
       handleGameEndCheck(newState, player);
-      await updateState(newState);
+      return newState;
+    });
   };
 
   const chordCell = async (x: number, y: number) => {
-      const currentGs = stateRef.current.gameState;
-      if (!currentGs || !userId || currentGs.status !== 'playing') return;
-      const newState = JSON.parse(JSON.stringify(currentGs));
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      const newState: MinesweeperState = JSON.parse(JSON.stringify(current));
       const player = newState.players[userId];
 
-      if (!player || player.status !== 'playing') return;
-      const cell = player.board[y][x];
+      if (!player || player.status !== 'playing') return null;
 
-      if (!cell.isOpen || cell.neighborCount === 0) return;
+      const { changed, hitMine } = chordCellLogic(player.board, x, y, newState.settings.width, newState.settings.height);
+      if (!changed) return null; // nothing opened — no state write
 
-      const neighbors = getNeighbors(x, y, newState.settings.width, newState.settings.height);
-      const flaggedCount = neighbors.reduce((acc, n) => acc + (player.board[n.y][n.x].isFlagged ? 1 : 0), 0);
-
-      if (flaggedCount === cell.neighborCount) {
-          let hitMine = false;
-          neighbors.forEach(n => {
-              const nCell = player.board[n.y][n.x];
-              if (!nCell.isOpen && !nCell.isFlagged) {
-                  if (nCell.isMine) {
-                      hitMine = true;
-                      nCell.isOpen = true;
-                  } else {
-                      openCellIterative(player.board, n.x, n.y, newState.settings.width, newState.settings.height);
-                  }
-              }
-          });
-
-          if (hitMine) {
-              player.status = 'lost';
-              player.board.forEach((r:any) => r.forEach((c:any) => { if (c.isMine) c.isOpen = true; }));
-          }
-          handleGameEndCheck(newState, player);
-          await updateState(newState);
+      if (hitMine) {
+          player.status = 'lost';
+          player.board.forEach((r) => r.forEach((c) => { if (c.isMine) c.isOpen = true; }));
       }
+      handleGameEndCheck(newState, player);
+      return newState;
+    });
   };
 
   const handleTimeout = async () => {
-      const currentGs = stateRef.current.gameState;
-      if (!currentGs || !userId || currentGs.status !== 'playing') return;
-      const newState = JSON.parse(JSON.stringify(currentGs));
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      const newState: MinesweeperState = JSON.parse(JSON.stringify(current));
       const player = newState.players[userId];
+      if (!player || player.status !== 'playing') return null;
 
-      if (player && player.status === 'playing') {
-          player.status = 'lost';
-          player.board.forEach((r:any) => r.forEach((c:any) => { if (c.isMine) c.isOpen = true; }));
-          handleGameEndCheck(newState, player);
-          await updateState(newState);
-      }
+      player.status = 'lost';
+      player.board.forEach((r) => r.forEach((c) => { if (c.isMine) c.isOpen = true; }));
+      handleGameEndCheck(newState, player);
+      return newState;
+    });
   };
 
   const leaveGame = async () => {
-     const currentGs = stateRef.current.gameState;
+     const currentGs = gameStateRef.current;
      if (!lobbyId || !userId || !currentGs) return;
 
-     const newState = JSON.parse(JSON.stringify(currentGs));
+     // A finished match is a record, not live state: leaving must not rewrite
+     // the results the other players are still looking at. Just walk away —
+     // the page navigates us out.
+     if (currentGs.status === 'finished') return;
+
+     const newState: MinesweeperState = JSON.parse(JSON.stringify(currentGs));
      const wasHost = newState.players[userId]?.isHost;
 
      if (newState.status === 'waiting') {
@@ -394,12 +262,10 @@ export function useMinesweeperGame(lobbyId: string | null, userId: string | unde
          }
      }
 
-     const remainingActive = Object.values(newState.players).filter((p:any) => p.status !== 'left') as MinesweeperPlayer[];
+     const remainingActive = Object.values(newState.players).filter((p) => p.status !== 'left');
 
      if (remainingActive.length === 0) {
-         await supabase.from('lobbies').delete().eq('id', lobbyId);
-         setGameState(null);
-         setLobbyDeleted(true);
+         await deleteLobby();
      } else {
          if (wasHost) {
              const nextHost = remainingActive[0];

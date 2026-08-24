@@ -1,86 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { GameState, Player, Role } from '@/types/coup';
 import { DICTIONARY } from '@/constants/coup';
 import { updatePlayerStats } from '@/lib/playerStats';
+import { useLobbySync } from '@/hooks/core/useLobbySync';
+import { shuffleDeck, buildDeck, getRequiredRoles } from '@/lib/gameLogic/coup';
 
-const shuffleDeck = (deck: Role[]): Role[] => {
-  const newDeck = [...deck];
-  for (let i = newDeck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [newDeck[i], newDeck[j]] = [newDeck[j], newDeck[i]];
-  }
-  return newDeck;
-};
+// Module-level helper: sidesteps the react-compiler purity heuristic
+// (Date.now inside event handlers is a legitimate use)
+const now = () => Date.now();
 
 export function useCoupGame(lobbyId: string | null, userId: string | undefined) {
-  const [gameState, setGameState] = useState<GameState | null>(null);
-  const [roomMeta, setRoomMeta] = useState<{ name: string; code: string; isHost: boolean } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lobbyDeleted, setLobbyDeleted] = useState(false);
-
-  const stateRef = useRef<{ lobbyId: string | null; userId: string | undefined; gameState: GameState | null }>({
-    lobbyId, userId, gameState: null
+  const {
+    gameState, setGameState, gameStateRef,
+    roomMeta, loading, lobbyDeleted,
+    updateState, deleteLobby
+  } = useLobbySync<GameState>({
+    lobbyId,
+    userId,
+    channelPrefix: 'lobby-coup'
   });
-
-  useEffect(() => {
-    stateRef.current = { lobbyId, userId, gameState };
-  }, [lobbyId, userId, gameState]);
-
-  // --- SYNC ---
-  const fetchLobbyState = useCallback(async () => {
-    if (!lobbyId) return;
-    try {
-      const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
-      if (data) {
-        setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === userId });
-        if (data.game_state) setGameState(data.game_state);
-      } else {
-        setGameState(null);
-        setLobbyDeleted(true);
-      }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [lobbyId, userId]);
-
-  useEffect(() => {
-    if (!lobbyId) return;
-    fetchLobbyState();
-
-    const ch = supabase.channel(`lobby-coup:${lobbyId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      (payload) => {
-          if (payload.new.game_state) {
-            setGameState(prev => {
-                if (payload.new.status === 'waiting') {
-                    return payload.new.game_state;
-                }
-                if (prev && (payload.new.game_state.version || 0) < (prev.version || 0)) return prev;
-                return payload.new.game_state;
-            });
-          }
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      () => {
-          setGameState(null);
-          setLobbyDeleted(true);
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(ch); };
-  }, [lobbyId, fetchLobbyState]);
-
-  const updateState = async (newState: GameState) => {
-    newState.version = (newState.version || 0) + 1;
-    newState.lastActionTime = Date.now();
-
-    setGameState(newState);
-    if (stateRef.current.lobbyId) {
-       await supabase.from('lobbies').update({
-           game_state: newState,
-           status: newState.status
-       }).eq('id', stateRef.current.lobbyId);
-    }
-  };
 
   const addLog = (state: GameState, user: string, action: string) => {
     const time = new Date().toLocaleTimeString('ru-RU', { hour12: false, hour: '2-digit', minute:'2-digit' });
@@ -95,6 +34,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
     if (alivePlayers.length <= 1) {
       state.status = 'finished';
       state.winner = alivePlayers[0]?.name || 'Unknown';
+      state.winnerId = alivePlayers[0]?.id;
       state.phase = 'choosing_action';
       state.turnDeadline = undefined;
       addLog(state, '🏆', `Победитель: ${state.winner}!`);
@@ -112,11 +52,11 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
     state.pendingPlayerId = undefined;
     state.exchangeBuffer = undefined;
     state.passedPlayers = [];
-    state.turnDeadline = Date.now() + (60 * 1000);
+    state.turnDeadline = now() + (60 * 1000);
   };
 
   const skipTurn = async () => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs) return;
       const newState: GameState = JSON.parse(JSON.stringify(currentGs));
 
@@ -145,6 +85,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
              if (alive.length <= 1) {
                  newState.status = 'finished';
                  newState.winner = alive[0]?.name || 'Unknown';
+                 newState.winnerId = alive[0]?.id;
                  addLog(newState, '🏆', `Победитель: ${newState.winner}!`);
              } else {
                  while (newState.players[newState.turnIndex].isDead) {
@@ -156,7 +97,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
                  newState.pendingPlayerId = undefined;
                  newState.exchangeBuffer = undefined;
                  newState.passedPlayers = [];
-                 newState.turnDeadline = Date.now() + (60 * 1000);
+                 newState.turnDeadline = now() + (60 * 1000);
              }
           }
       }
@@ -167,7 +108,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
               if (['steal', 'assassinate'].includes(newState.currentAction?.type || '')) {
                   newState.phase = 'waiting_for_blocks';
                   newState.passedPlayers = [];
-                  newState.turnDeadline = Date.now() + (30 * 1000);
+                  newState.turnDeadline = now() + (30 * 1000);
               } else {
                   applyActionEffect(newState);
               }
@@ -181,7 +122,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
   };
 
   const performAction = async (actionType: string, targetId?: string) => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs || !userId) return;
 
     const newState: GameState = JSON.parse(JSON.stringify(currentGs));
@@ -229,12 +170,12 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
       newState.phase = 'waiting_for_challenges';
     }
 
-    newState.turnDeadline = Date.now() + (30 * 1000);
+    newState.turnDeadline = now() + (30 * 1000);
     await updateState(newState);
   };
 
   const pass = async () => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs || !userId) return;
     const newState: GameState = JSON.parse(JSON.stringify(currentGs));
     if (!newState.currentAction) return;
@@ -253,7 +194,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
              if (['steal', 'assassinate'].includes(newState.currentAction.type)) {
                  newState.phase = 'waiting_for_blocks';
                  newState.passedPlayers = [];
-                 newState.turnDeadline = Date.now() + (30 * 1000);
+                 newState.turnDeadline = now() + (30 * 1000);
              } else {
                  applyActionEffect(newState);
              }
@@ -269,7 +210,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
   };
 
   const challenge = async () => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs || !userId) return;
     const newState: GameState = JSON.parse(JSON.stringify(currentGs));
     const challenger = newState.players.find(p => p.id === userId);
@@ -310,12 +251,12 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
       newState.currentAction.nextPhase = isBlockChallenge ? 'continue_action' : 'action_cancelled';
     }
 
-    newState.turnDeadline = Date.now() + (60 * 1000);
+    newState.turnDeadline = now() + (60 * 1000);
     await updateState(newState);
   };
 
   const block = async () => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs || !userId) return;
     const newState: GameState = JSON.parse(JSON.stringify(currentGs));
     if (!newState.currentAction) return;
@@ -324,7 +265,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
     newState.currentAction.blockedBy = userId;
     newState.phase = 'waiting_for_block_challenges';
     newState.passedPlayers = [];
-    newState.turnDeadline = Date.now() + (30 * 1000);
+    newState.turnDeadline = now() + (30 * 1000);
 
     const blockerName = newState.players.find(p => p.id === userId)?.name || '?';
     addLog(newState, blockerName, `БЛОКИРУЕТ действие`);
@@ -333,7 +274,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
   };
 
   const resolveLoss = async (cardIndex: number) => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs || !userId) return;
     const newState: GameState = JSON.parse(JSON.stringify(currentGs));
 
@@ -379,7 +320,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
                  } else {
                      if (['steal', 'assassinate'].includes(action.type)) {
                          newState.phase = 'waiting_for_blocks';
-                         newState.turnDeadline = Date.now() + (30 * 1000);
+                         newState.turnDeadline = now() + (30 * 1000);
                      } else {
                          applyActionEffect(newState);
                      }
@@ -394,7 +335,7 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
   };
 
   const resolveExchange = async (selectedIndices: number[]) => {
-      const currentGs = stateRef.current.gameState;
+      const currentGs = gameStateRef.current;
       if (!currentGs || !userId) return;
       const newState: GameState = JSON.parse(JSON.stringify(currentGs));
       if (newState.phase !== 'resolving_exchange' || newState.pendingPlayerId !== userId) return;
@@ -431,7 +372,12 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
       if (!action) return;
       const actor = state.players.find(p => p.id === action.player);
       const target = state.players.find(p => p.id === action.target);
-      if (!actor) return;
+      if (!actor) {
+          // The actor left the game — do not hang in the phase, advance the turn
+          addLog(state, 'Система', 'Автор действия вышел. Действие отменено.');
+          nextTurn(state);
+          return;
+      }
 
       switch(action.type) {
           case 'tax':
@@ -459,44 +405,66 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
                   state.pendingPlayerId = target.id;
                   delete action.nextPhase;
                   addLog(state, 'Система', `Покушение успешно! ${target.name} теряет карту`);
-                  state.turnDeadline = Date.now() + (60 * 1000);
+                  state.turnDeadline = now() + (60 * 1000);
               } else {
                   nextTurn(state);
               }
               break;
-          case 'exchange':
+          case 'exchange': {
+              // Guard against an exhausted deck (should not happen, but never hang)
+              if (state.deck.length < 2) {
+                  addLog(state, 'Система', 'В колоде недостаточно карт для обмена.');
+                  nextTurn(state);
+                  break;
+              }
               const drawn = [state.deck.pop()!, state.deck.pop()!];
               const currentHand = actor.cards.filter(c => !c.revealed).map(c => c.role);
               state.exchangeBuffer = [...currentHand, ...drawn];
               state.phase = 'resolving_exchange';
               state.pendingPlayerId = actor.id;
-              state.turnDeadline = Date.now() + (60 * 1000);
+              state.turnDeadline = now() + (60 * 1000);
               break;
+          }
           default:
               nextTurn(state);
       }
   };
 
-  const getRequiredRoles = (action: string, isBlock: boolean): Role[] => {
-    if (isBlock) {
-        if (action === 'foreign_aid') return ['duke'];
-        if (action === 'assassinate') return ['contessa'];
-        if (action === 'steal') return ['captain', 'ambassador'];
-        return ['duke'];
+  // Self-join when the game is opened via a direct link
+  const initGame = async (userProfile: { name: string; avatarUrl: string }) => {
+    if (!userId || !lobbyId) return;
+
+    const { data } = await supabase.from('lobbies').select('game_state').eq('id', lobbyId).single();
+    const currentState = data?.game_state as GameState;
+    if (!currentState || !Array.isArray(currentState.players)) return;
+
+    if (!currentState.players.find(p => p.id === userId)) {
+      if (currentState.status !== 'waiting') return;
+      const maxPlayers = currentState.settings?.maxPlayers || 6;
+      if (currentState.players.length >= maxPlayers) return;
+
+      const newState = JSON.parse(JSON.stringify(currentState)) as GameState;
+      const isFirst = newState.players.length === 0;
+      newState.players.push({
+        id: userId,
+        name: userProfile.name,
+        avatarUrl: userProfile.avatarUrl,
+        coins: 2,
+        cards: [],
+        isDead: false,
+        isHost: isFirst,
+        isReady: true
+      });
+      await updateState(newState);
     } else {
-        if (action === 'tax') return ['duke'];
-        if (action === 'steal') return ['captain'];
-        if (action === 'assassinate') return ['assassin'];
-        if (action === 'exchange') return ['ambassador'];
-        return ['duke'];
+      setGameState(currentState);
     }
   };
 
   const startGame = async () => {
-    const currentGs = stateRef.current.gameState;
+    const currentGs = gameStateRef.current;
     if (!currentGs) return;
-    const roles: Role[] = ['duke', 'duke', 'duke', 'assassin', 'assassin', 'assassin', 'captain', 'captain', 'captain', 'ambassador', 'ambassador', 'ambassador', 'contessa', 'contessa', 'contessa'];
-    const shuffled = shuffleDeck(roles);
+    const shuffled = shuffleDeck(buildDeck());
 
     const newPlayers = currentGs.players.map(p => ({
       ...p, coins: 2, isDead: false,
@@ -505,8 +473,9 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
 
     const newState: GameState = {
       ...currentGs, status: 'playing', players: newPlayers, deck: shuffled, turnIndex: 0,
-      phase: 'choosing_action', currentAction: null, logs: [], winner: undefined,
-      lastActionTime: Date.now(), version: 1, turnDeadline: Date.now() + (60 * 1000),
+      phase: 'choosing_action', currentAction: null, logs: [], winner: undefined, winnerId: undefined,
+      lastActionTime: now(), version: 1, turnDeadline: now() + (60 * 1000),
+      startTime: now(),
       passedPlayers: []
     };
     addLog(newState, 'Система', 'Игра началась! Всем удачи.');
@@ -514,16 +483,23 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
   };
 
   const leaveGame = async () => {
-     const currentGs = stateRef.current.gameState;
+     const currentGs = gameStateRef.current;
      if (!lobbyId || !userId || !currentGs) return;
+
+     // A finished match is a record, not live state: leaving must not rewrite
+     // the results the other players are still looking at. Just walk away —
+     // the page navigates us out.
+     if (currentGs.status === 'finished') return;
 
      const newState = JSON.parse(JSON.stringify(currentGs));
      const wasHost = newState.players.find((p: Player) => p.id === userId)?.isHost;
+     const leaverIdx = newState.players.findIndex((p: Player) => p.id === userId);
+     const wasCurrentTurn = leaverIdx === newState.turnIndex;
 
      newState.players = newState.players.filter((p: Player) => p.id !== userId);
 
      if (newState.players.length === 0) {
-         await supabase.from('lobbies').delete().eq('id', lobbyId);
+         await deleteLobby();
      } else {
          if (wasHost && newState.players.length > 0) {
             newState.players[0].isHost = true;
@@ -532,33 +508,70 @@ export function useCoupGame(lobbyId: string | null, userId: string | undefined) 
 
          if (newState.status === 'playing') {
              addLog(newState, 'Система', 'Игрок покинул матч');
+
+             // Re-base the turn index after removing the player from the array
+             if (leaverIdx !== -1 && leaverIdx < newState.turnIndex) {
+                 newState.turnIndex--;
+             }
+             if (newState.turnIndex >= newState.players.length) {
+                 newState.turnIndex = 0;
+             }
+
              const alivePlayers = newState.players.filter((p: Player) => !p.isDead);
              if (alivePlayers.length === 1) {
                  newState.status = 'finished';
                  newState.winner = alivePlayers[0].name;
+                 newState.winnerId = alivePlayers[0].id;
                  addLog(newState, '🏆', `Победитель: ${newState.winner}!`);
+             } else {
+                 // If the leaver was involved in the current action (acting, targeted,
+                 // blocking, or pending a card loss) — reset the phase to a fresh turn
+                 const action = newState.currentAction;
+                 const wasInvolved = wasCurrentTurn ||
+                     newState.pendingPlayerId === userId ||
+                     action?.player === userId ||
+                     action?.target === userId ||
+                     action?.blockedBy === userId;
+
+                 if (wasInvolved) {
+                     while (newState.players[newState.turnIndex].isDead) {
+                         newState.turnIndex = (newState.turnIndex + 1) % newState.players.length;
+                     }
+                     newState.phase = 'choosing_action';
+                     newState.currentAction = null;
+                     newState.pendingPlayerId = undefined;
+                     newState.exchangeBuffer = undefined;
+                     newState.passedPlayers = [];
+                     newState.turnDeadline = now() + (60 * 1000);
+                 }
              }
          }
          await updateState(newState);
      }
   };
 
-  // ОТСЛЕЖИВАНИЕ КОНЦА ИГРЫ ДЛЯ ЗАПИСИ СТАТИСТИКИ
+  // TRACK GAME END TO RECORD STATISTICS
   useEffect(() => {
       if (gameState?.status === 'finished' && userId && !lobbyDeleted) {
           const me = gameState.players.find(p => p.id === userId);
-          // В Coup победитель - последний выживший. Если игра закончена и я жив - я победил.
-          const isWinner = me && !me.isDead;
+          // The winner is identified by id (robust to duplicate names);
+          // falls back to "I am alive" for legacy states without winnerId
+          const isWinner = gameState.winnerId ? gameState.winnerId === userId : (me && !me.isDead);
 
           if (me) {
+              // Actual match duration; 900s fallback for legacy states
+              const duration = gameState.startTime
+                  ? Math.max(1, Math.round((now() - gameState.startTime) / 1000))
+                  : 900;
               updatePlayerStats(userId, {
                   gameType: 'coup',
                   result: isWinner ? 'win' : 'loss',
-                  durationSeconds: 900 // Среднее время партии
+                  durationSeconds: duration
               });
           }
       }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the match finishes; adding gameState.players would re-record stats
   }, [gameState?.status, userId, lobbyDeleted]);
 
-  return { gameState, roomMeta, loading, lobbyDeleted, performAction, startGame, leaveGame, pass, challenge, block, resolveLoss, resolveExchange, skipTurn };
+  return { gameState, roomMeta, loading, lobbyDeleted, initGame, performAction, startGame, leaveGame, pass, challenge, block, resolveLoss, resolveExchange, skipTurn };
 }

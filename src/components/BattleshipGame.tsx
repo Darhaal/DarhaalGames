@@ -1,15 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import Image from 'next/image';
+import React, { useState, useEffect, memo } from 'react';
 import {
     RotateCw, Trash2, Check, Shuffle,
     Anchor, Trophy, Crosshair, Map, Shield, BarChart3, User, AlertCircle
 } from 'lucide-react';
-import { Ship, ShipType, FLEET_CONFIG, Orientation, Coordinate } from '@/types/battleship';
-import { checkPlacement } from '@/hooks/useBattleshipGame';
+import { Ship, ShipType, FLEET_CONFIG, Orientation, Coordinate, CellStatus, BattleshipState } from '@/types/battleship';
+import { checkPlacement } from '@/lib/gameLogic/battleship';
 import GameHeader from './GameHeader';
 import GameRulesModal from './GameRulesModal';
 import { GAME_RULES } from '@/constants/rules';
+import { playSfx } from '@/lib/sound';
 
 const CELL_SIZE_L = "w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10";
 const CELL_SIZE_S = "w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6";
@@ -88,10 +90,24 @@ const getShipColor = (type: ShipType) => {
     }
 };
 
+interface GridCellProps {
+    status: CellStatus | 'empty';
+    shipPart?: ShipType;
+    onClick?: () => void;
+    onMouseEnter?: () => void;
+    onContextMenu?: (e: React.MouseEvent) => void;
+    onDrop?: (e: React.DragEvent) => void;
+    onDragOver?: (e: React.DragEvent) => void;
+    onDragStart?: (e: React.DragEvent) => void;
+    isHovered?: boolean;
+    hoverValid?: boolean;
+    size?: 'large' | 'small';
+}
+
 const GridCell = memo(({
-    x, y, status, shipPart, onClick, onMouseEnter, onContextMenu,
+    status, shipPart, onClick, onMouseEnter, onContextMenu,
     onDrop, onDragOver, onDragStart, isHovered, hoverValid, size = 'large'
-}: any) => {
+}: GridCellProps) => {
     const isSmall = size === 'small';
     let content = null;
 
@@ -196,10 +212,25 @@ const FleetStatusList = ({ ships, isEnemy = false }: { ships: Ship[], isEnemy?: 
     );
 };
 
+interface BattleshipGameProps {
+    gameState: BattleshipState;
+    userId: string;
+    myShips: Ship[];
+    autoPlaceShips: () => void;
+    clearShips: () => void;
+    placeShipManual: (ship: Ship) => boolean;
+    removeShip: (id: string) => void;
+    submitShips: () => void;
+    fireShot: (x: number, y: number) => void;
+    leaveGame: () => void;
+    handleTimeout: () => void;
+    lang: 'ru' | 'en';
+}
+
 export default function BattleshipGame({
     gameState, userId, myShips, autoPlaceShips, clearShips,
     placeShipManual, removeShip, submitShips, fireShot, leaveGame, handleTimeout, lang
-}: any) {
+}: BattleshipGameProps) {
     const [orientation, setOrientation] = useState<Orientation>('horizontal');
     const [selectedType, setSelectedType] = useState<ShipType | null>(null);
     const [hoverPos, setHoverPos] = useState<Coordinate | null>(null);
@@ -207,7 +238,7 @@ export default function BattleshipGame({
     const [movingShipId, setMovingShipId] = useState<string | null>(null);
     const [showRules, setShowRules] = useState(false);
 
-    const t: any = DICTIONARY[lang as 'ru' | 'en'] || DICTIONARY['ru'];
+    const t = DICTIONARY[lang] || DICTIONARY['ru'];
     const me = userId ? gameState.players[userId] : null;
     const opponentId = Object.keys(gameState.players).find(id => id !== userId);
     const opponent = opponentId ? gameState.players[opponentId] : null;
@@ -217,16 +248,24 @@ export default function BattleshipGame({
     useEffect(() => {
         if (phase !== 'playing') return;
         const interval = setInterval(() => {
-            const elapsed = Math.floor((Date.now() - (gameState.lastActionTime || Date.now())) / 1000);
-            const remaining = Math.max(0, 60 - elapsed);
+            // Server-authoritative turn deadline; lastActionTime fallback for legacy states
+            const deadline = gameState.turnDeadline || ((gameState.lastActionTime || Date.now()) + 60000);
+            const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
             setTimeLeft(remaining);
             if (remaining === 0 && isMyTurn) handleTimeout();
         }, 1000);
         return () => clearInterval(interval);
-    }, [gameState.lastActionTime, phase, isMyTurn, handleTimeout]);
+    }, [gameState.turnDeadline, gameState.lastActionTime, phase, isMyTurn, handleTimeout]);
 
-    // Keyboard
+    // Match outcome sound
     useEffect(() => {
+        if (phase === 'finished') playSfx(gameState.winner === userId ? 'win' : 'lose');
+    }, [phase, gameState.winner, userId]);
+
+    // Keyboard: rotate the ship being placed (setup phase only, so it does not
+    // swallow Space/scroll during the battle phase)
+    useEffect(() => {
+        if (phase !== 'setup') return;
         const handleKeyDown = (e: KeyboardEvent) => {
             if (['Space', 'KeyQ', 'KeyE', 'KeyR'].includes(e.code)) {
                 e.preventDefault();
@@ -235,24 +274,24 @@ export default function BattleshipGame({
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+    }, [phase]);
 
-    const getMyCellContent = useCallback((x: number, y: number) => {
+    const getMyCellContent = (x: number, y: number) => {
         const s = myShips.find((s: Ship) => {
             if (movingShipId === s.id) return false;
             if (s.orientation === 'horizontal') return s.position.y === y && x >= s.position.x && x < s.position.x + s.size;
             return s.position.x === x && y >= s.position.y && y < s.position.y + s.size;
         });
         const shot = phase === 'playing' && opponent?.shots ? opponent.shots[`${x},${y}`] : null;
-        return { status: shot || 'empty', shipPart: s?.type, ship: s };
-    }, [myShips, movingShipId, phase, opponent?.shots]);
+        return { status: (shot || 'empty') as CellStatus | 'empty', shipPart: s?.type, ship: s };
+    };
 
-    const getOpponentCellContent = useCallback((x: number, y: number) => {
+    const getOpponentCellContent = (x: number, y: number) => {
         const shot = me?.shots[`${x},${y}`];
-        return { status: shot || 'empty' };
-    }, [me?.shots]);
+        return { status: (shot || 'empty') as CellStatus | 'empty' };
+    };
 
-    const isPlacementValid = React.useMemo(() => {
+    const isPlacementValid = (() => {
         if (!selectedType || !hoverPos) return false;
         const config = FLEET_CONFIG.find(c => c.type === selectedType);
         if (!config) return false;
@@ -268,7 +307,7 @@ export default function BattleshipGame({
             },
             movingShipId || undefined
         );
-    }, [selectedType, hoverPos, orientation, myShips, movingShipId]);
+    })();
 
     const tryPlaceShip = (x: number, y: number, type: ShipType, existingId?: string) => {
         const config = FLEET_CONFIG.find(c => c.type === type);
@@ -304,12 +343,12 @@ export default function BattleshipGame({
     };
 
     const handleDragStartMenu = (e: React.DragEvent, type: ShipType) => {
-        if (typeof window !== 'undefined') e.dataTransfer.setDragImage(new Image(), 0, 0);
+        if (typeof window !== 'undefined') e.dataTransfer.setDragImage(new window.Image(), 0, 0);
         setSelectedType(type);
         e.dataTransfer.setData('type', type);
     };
     const handleDragStartBoard = (e: React.DragEvent, ship: Ship) => {
-        if (typeof window !== 'undefined') e.dataTransfer.setDragImage(new Image(), 0, 0);
+        if (typeof window !== 'undefined') e.dataTransfer.setDragImage(new window.Image(), 0, 0);
         setMovingShipId(ship.id);
         setOrientation(ship.orientation);
         e.dataTransfer.setData('type', ship.type);
@@ -323,12 +362,12 @@ export default function BattleshipGame({
         setMovingShipId(null);
     };
 
-    const isPhantomCell = useCallback((x: number, y: number) => {
+    const isPhantomCell = (x: number, y: number) => {
         if (!hoverPos || !selectedType) return false;
         const config = FLEET_CONFIG.find(c => c.type === selectedType)!;
         if (orientation === 'horizontal') return y === hoverPos.y && x >= hoverPos.x && x < hoverPos.x + config.size;
         else return x === hoverPos.x && y >= hoverPos.y && y < hoverPos.y + config.size;
-    }, [hoverPos, selectedType, orientation]);
+    };
 
     if (phase === 'finished') {
         const isWinner = gameState.winner === userId;
@@ -350,7 +389,8 @@ export default function BattleshipGame({
                         <p className="text-2xl font-black text-[#1A1F26] mb-8 leading-tight">
                             {isSurrender ? t.surrenderMsg : (isWinner ? t.winMsg : t.loseMsg)}
                         </p>
-                        <button onClick={() => { leaveGame(); window.location.href='/'; }} className="w-full py-4 bg-[#1A1F26] text-white rounded-xl font-black uppercase tracking-widest hover:bg-[#9e1316] transition-colors">{t.menu}</button>
+                        {/* leaveGame (handleLeave) awaits the DB write and navigates by itself */}
+                        <button onClick={leaveGame} className="w-full py-4 bg-[#1A1F26] text-white rounded-xl font-black uppercase tracking-widest hover:bg-[#9e1316] transition-colors">{t.menu}</button>
                     </div>
                 </div>
             </div>
@@ -359,14 +399,14 @@ export default function BattleshipGame({
 
     return (
         <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans overflow-hidden relative">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
+            <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
 
             <GameHeader
                 title="Battleship"
                 icon={Anchor}
                 timeLeft={timeLeft}
                 showTime={phase === 'playing'}
-                onLeave={() => { leaveGame(); window.location.href='/play' }}
+                onLeave={leaveGame}
                 onShowRules={() => setShowRules(true)}
                 lang={lang}
             />
@@ -382,12 +422,12 @@ export default function BattleshipGame({
                     <div className="flex flex-col w-full max-w-5xl gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         <div className="flex justify-between items-center bg-white p-4 rounded-[24px] border border-[#E6E1DC] shadow-sm w-full">
                             <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-full bg-[#F5F5F0] overflow-hidden border-2 border-white shadow-md">{me?.avatarUrl ? <img src={me.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>
+                                <div className="w-12 h-12 rounded-full bg-[#F5F5F0] overflow-hidden border-2 border-white shadow-md">{me?.avatarUrl ? <Image src={me.avatarUrl} alt="" width={48} height={48} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>
                                 <div><div className="font-black text-sm uppercase">{me?.name || 'You'}</div><div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md inline-block mt-1 ${me?.isReady ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{me?.isReady ? t.ready : t.placing}</div></div>
                             </div>
                             <div className="flex items-center gap-4 text-right">
                                 <div><div className="font-black text-sm uppercase">{opponent?.name || t.enemy}</div><div className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md inline-block mt-1 ${opponent?.isReady ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{opponent?.isReady ? t.ready : (!opponent ? t.waiting : t.placing)}</div></div>
-                                <div className="w-12 h-12 rounded-full bg-[#F5F5F0] overflow-hidden border-2 border-white shadow-md opacity-80">{opponent?.avatarUrl ? <img src={opponent.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>
+                                <div className="w-12 h-12 rounded-full bg-[#F5F5F0] overflow-hidden border-2 border-white shadow-md opacity-80">{opponent?.avatarUrl ? <Image src={opponent.avatarUrl} alt="" width={48} height={48} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>
                             </div>
                         </div>
                         <div className="flex flex-col lg:flex-row gap-8 items-start w-full">
@@ -399,7 +439,7 @@ export default function BattleshipGame({
                                         const isHovered = isPhantomCell(x, y);
                                         const isValid = isHovered ? isPlacementValid : false;
 
-                                        return <GridCell key={i} x={x} y={y} status={'empty'} shipPart={shipPart} onClick={() => handleCellClick(x, y)} onMouseEnter={() => setHoverPos({x, y})} onDrop={(e:any) => handleDrop(e, x, y)} onDragOver={(e:any) => {e.preventDefault(); setHoverPos({x, y})}} onDragStart={(e:any) => ship && handleDragStartBoard(e, ship)} onContextMenu={(e:any) => {e.preventDefault(); setOrientation(prev => prev === 'horizontal' ? 'vertical' : 'horizontal')}} isHovered={isHovered} hoverValid={isValid} />;
+                                        return <GridCell key={i} status={'empty'} shipPart={shipPart} onClick={() => handleCellClick(x, y)} onMouseEnter={() => setHoverPos({x, y})} onDrop={(e) => handleDrop(e, x, y)} onDragOver={(e) => {e.preventDefault(); setHoverPos({x, y})}} onDragStart={(e) => ship && handleDragStartBoard(e, ship)} onContextMenu={(e) => {e.preventDefault(); setOrientation(prev => prev === 'horizontal' ? 'vertical' : 'horizontal')}} isHovered={isHovered} hoverValid={isValid} />;
                                     })}
                                 </div>
                                 <div className="flex justify-between items-center mt-6 bg-[#F8FAFC] p-2 rounded-2xl border border-[#E6E1DC]">
@@ -438,13 +478,13 @@ export default function BattleshipGame({
                     <div className="flex flex-col w-full max-w-6xl gap-6 animate-in fade-in">
                         <div className="flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-[32px] border border-[#E6E1DC] shadow-sm w-full gap-4">
                             <div className="flex items-center gap-4 w-full md:w-1/3">
-                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{me?.avatarUrl ? <img src={me.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>{isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
+                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{me?.avatarUrl ? <Image src={me.avatarUrl} alt="" width={56} height={56} className="w-full h-full object-cover" /> : <User className="w-6 h-6 m-auto mt-2 text-gray-400"/>}</div>{isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
                                 <div className="flex flex-col"><span className="font-black text-[#1A1F26] text-sm uppercase tracking-tight">{me?.name || 'You'}</span><div className="flex items-center gap-2 text-xs font-bold text-[#8A9099] bg-[#F5F5F0] px-2 py-0.5 rounded-lg mt-1"><Shield className="w-3 h-3 text-emerald-600" /><span>{me?.aliveShipsCount}/10</span></div></div>
                             </div>
                             <div className="flex flex-col items-center justify-center w-full md:w-1/3 order-first md:order-none"><div className={`text-[10px] font-black uppercase tracking-[0.2em] px-6 py-2 rounded-full border shadow-sm transition-all duration-300 ${isMyTurn ? 'bg-[#9e1316] text-white border-[#9e1316] scale-105' : 'bg-white text-[#8A9099] border-[#E6E1DC]'}`}>{isMyTurn ? t.yourTurn : t.enemyTurn}</div></div>
                             <div className="flex items-center gap-4 w-full md:w-1/3 justify-end">
                                 <div className="flex flex-col items-end"><span className="font-black text-[#1A1F26] text-sm uppercase tracking-tight">{opponent?.name || t.enemy}</span><div className="flex items-center gap-2 text-xs font-bold text-[#8A9099] bg-[#F5F5F0] px-2 py-0.5 rounded-lg mt-1"><span>{opponent?.aliveShipsCount}/10</span><Crosshair className="w-3 h-3 text-[#9e1316]" /></div></div>
-                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{opponent?.avatarUrl ? <img src={opponent.avatarUrl} className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-gray-400 m-auto mt-2" />}</div>{!isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-[#9e1316] border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
+                                <div className="relative"><div className="w-14 h-14 rounded-full border-2 border-white shadow-md overflow-hidden bg-[#F5F5F0]">{opponent?.avatarUrl ? <Image src={opponent.avatarUrl} alt="" width={56} height={56} className="w-full h-full object-cover" /> : <User className="w-8 h-8 text-gray-400 m-auto mt-2" />}</div>{!isMyTurn && <div className="absolute bottom-0 right-0 w-4 h-4 bg-[#9e1316] border-2 border-white rounded-full animate-pulse shadow-sm"></div>}</div>
                             </div>
                         </div>
                         <div className="flex flex-col lg:flex-row gap-8 items-start justify-center w-full">
@@ -455,7 +495,7 @@ export default function BattleshipGame({
                                         {Array.from({ length: 100 }).map((_, i) => {
                                             const x = i % 10, y = Math.floor(i / 10);
                                             const { status } = getOpponentCellContent(x, y);
-                                            return <GridCell key={i} x={x} y={y} status={status} onClick={() => isMyTurn && status === 'empty' && fireShot(x, y)} />;
+                                            return <GridCell key={i} status={status} onClick={() => isMyTurn && status === 'empty' && fireShot(x, y)} />;
                                         })}
                                     </div>
                                 </div>
@@ -467,7 +507,7 @@ export default function BattleshipGame({
                                         {Array.from({ length: 100 }).map((_, i) => {
                                             const x = i % 10, y = Math.floor(i / 10);
                                             const { status, shipPart } = getMyCellContent(x, y);
-                                            return <GridCell key={i} x={x} y={y} status={status} shipPart={shipPart} size="small" />;
+                                            return <GridCell key={i} status={status} shipPart={shipPart} size="small" />;
                                         })}
                                     </div>
                                 </div>

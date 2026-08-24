@@ -3,6 +3,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { errorMessage } from '@/lib/errors';
 import { Loader2, CheckCircle, AlertCircle, ArrowLeft, Lock } from 'lucide-react';
 
 function ResetPasswordContent() {
@@ -42,9 +43,9 @@ function ResetPasswordContent() {
       setStatus('success');
       setMsg('Password updated successfully!');
       setTimeout(() => router.push('/'), 2000);
-    } catch (error: any) {
+    } catch (error: unknown) {
       setStatus('error');
-      setMsg(error.message);
+      setMsg(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -54,7 +55,7 @@ function ResetPasswordContent() {
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 font-sans text-[#1A1F26] relative overflow-hidden">
 
       {/* Texture & Ambient */}
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 brightness-100 contrast-150 mix-blend-overlay pointer-events-none"></div>
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-50 brightness-100 contrast-150 mix-blend-overlay pointer-events-none"></div>
 
       <div className="w-full max-w-md bg-white border border-[#E6E1DC] p-10 rounded-[32px] shadow-2xl shadow-[#9e1316]/5 relative z-10 animate-in zoom-in-95 duration-500">
 

@@ -3,13 +3,24 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
+import { showToast } from '@/lib/toast';
+import { COPYRIGHT } from '@/constants/app';
+import SettingsButton from '@/components/SettingsButton';
+import { useEscape } from '@/hooks/useEscape';
 import {
   ArrowLeft, Search, Users, Lock, Play, X, Loader2,
-  Crown, Filter, KeyRound, Unlock, SortAsc, SortDesc,
-  Ship, Bomb, Fingerprint, ShieldAlert, Skull, ScrollText, Zap, LayoutGrid, Flag
+  Crown, Filter, KeyRound, SortAsc, SortDesc,
+  Ship, Bomb, Fingerprint, ScrollText, LayoutGrid, Flag
 } from 'lucide-react';
 
-type Lang = 'ru' | 'en';
+// Minimal player info inside game_state (shape differs per game)
+interface LobbyPlayerInfo {
+  id?: string;
+  userId?: string;
+  name?: string;
+  isHost?: boolean;
+}
 
 interface LobbyRow {
   id: string;
@@ -17,14 +28,16 @@ interface LobbyRow {
   code: string;
   game_state: {
       gameType?: string;
-      players: any;
+      players: LobbyPlayerInfo[] | Record<string, LobbyPlayerInfo>;
       settings?: { maxPlayers?: number };
   };
   status: string;
   is_private: boolean;
-  password?: string;
   created_at: string;
 }
+
+// IMPORTANT: the password column is intentionally NOT selected — the check
+// runs server-side via the join_lobby_check RPC (see supabase/migrations)
 
 type SortOption = 'newest' | 'oldest' | 'players-desc' | 'players-asc';
 
@@ -42,7 +55,6 @@ const TRANSLATIONS = {
     modes: 'Категории',
     coup: 'Coup',
     battleship: 'Морской Бой',
-    mafia: 'Мафия',
     minesweeper: 'Сапер',
     flager: 'Флагер',
     spyfall: 'Шпион',
@@ -61,8 +73,7 @@ const TRANSLATIONS = {
     errorFull: 'Мест нет',
     errorNotFound: 'Игра не найдена',
     create: 'Новая игра',
-    blocked: 'Скоро',
-    footer: 'Darhaal Games © 2026',
+    footer: COPYRIGHT,
   },
   en: {
     title: 'Game Lobby',
@@ -77,7 +88,6 @@ const TRANSLATIONS = {
     modes: 'Categories',
     coup: 'Coup',
     battleship: 'Battleship',
-    mafia: 'Mafia',
     minesweeper: 'Minesweeper',
     flager: 'Flager',
     spyfall: 'Spyfall',
@@ -96,8 +106,7 @@ const TRANSLATIONS = {
     errorFull: 'Room full',
     errorNotFound: 'Game not found',
     create: 'New Game',
-    blocked: 'Soon',
-    footer: 'Darhaal Games © 2026',
+    footer: COPYRIGHT,
   }
 };
 
@@ -105,7 +114,7 @@ function PlayContent() {
   const router = useRouter();
   const [lobbies, setLobbies] = useState<LobbyRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
 
   const [search, setSearch] = useState('');
   const [codeQuery, setCodeQuery] = useState('');
@@ -114,13 +123,26 @@ function PlayContent() {
 
   const [selectedLobby, setSelectedLobby] = useState<LobbyRow | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
+
+  // Escape closes the private-room password dialog
+  useEscape(!!selectedLobby, () => setSelectedLobby(null));
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  const fetchLobbies = async () => {
+    const { data } = await supabase
+      .from('lobbies')
+      .select('id, name, code, game_state, status, is_private, created_at')
+      .neq('status', 'finished')
+      .order('created_at', { ascending: false });
+
+    if (data) setLobbies(data as unknown as LobbyRow[]);
+    setLoading(false);
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id || null));
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang) setLang(savedLang);
-    fetchLobbies();
+    // Deferred call: the inner setState happens asynchronously (not in the effect body)
+    queueMicrotask(() => { fetchLobbies(); });
 
     const ch = supabase.channel('public_lobbies')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lobbies' }, fetchLobbies)
@@ -131,18 +153,7 @@ function PlayContent() {
 
   const t = TRANSLATIONS[lang];
 
-  const fetchLobbies = async () => {
-    const { data } = await supabase
-      .from('lobbies')
-      .select('*')
-      .neq('status', 'finished')
-      .order('created_at', { ascending: false });
-
-    if (data) setLobbies(data as unknown as LobbyRow[]);
-    setLoading(false);
-  };
-
-  const getPlayers = (lobby: LobbyRow): any[] => {
+  const getPlayers = (lobby: LobbyRow): LobbyPlayerInfo[] => {
       const p = lobby.game_state.players;
       if (Array.isArray(p)) return p;
       if (typeof p === 'object' && p !== null) return Object.values(p);
@@ -157,9 +168,23 @@ function PlayContent() {
   };
 
   const handleJoin = async (lobby: LobbyRow, pass?: string) => {
-    if (lobby.is_private && lobby.password !== pass) {
-      alert(t.errorPass);
-      return;
+    if (lobby.is_private) {
+      // Server-side password check (the password never leaves the DB)
+      const { data: passOk, error: rpcError } = await supabase.rpc('join_lobby_check', {
+        p_lobby_id: lobby.id,
+        p_password: pass || ''
+      });
+
+      if (rpcError) {
+        // No fallback on purpose: the password column is not readable by
+        // clients, so a failing RPC means the check cannot be performed at
+        // all. Refuse rather than let anyone in.
+        showToast(t.errorPass, 'error');
+        return;
+      } else if (!passOk) {
+        showToast(t.errorPass, 'error');
+        return;
+      }
     }
 
     const { data: { user } } = await supabase.auth.getUser();
@@ -167,7 +192,7 @@ function PlayContent() {
 
     // --- AUTH CHECK WITH REDIRECT TO GAME ---
     if (!user) {
-        // Формируем ссылку на саму игру, а не на лобби
+        // Link straight to the game, not the lobby list
         const targetGameUrl = `/game/${gameType}?id=${lobby.id}`;
         router.push(`/?returnUrl=${encodeURIComponent(targetGameUrl)}`);
         return;
@@ -180,66 +205,37 @@ function PlayContent() {
         .single();
 
     if (fetchError || !freshLobby) {
-        alert(t.errorNotFound);
+        showToast(t.errorNotFound, 'error');
         fetchLobbies();
         return;
     }
 
     if (freshLobby.status === 'finished') {
-        alert("Игра уже закончилась");
+        showToast(lang === 'ru' ? 'Игра уже закончилась' : 'Game already finished', 'info');
         fetchLobbies();
         return;
     }
 
     const players = getPlayers({ ...lobby, game_state: freshLobby.game_state });
 
-    if (players.some((p: any) => p.id === user.id || p.userId === user.id)) {
+    if (players.some((p) => p.id === user.id || p.userId === user.id)) {
       router.push(`/game/${gameType}?id=${lobby.id}`);
       return;
     }
 
     const maxPlayers = freshLobby.game_state.settings?.maxPlayers || (gameType === 'battleship' ? 2 : 6);
     if (players.length >= maxPlayers) {
-      alert(t.errorFull);
+      showToast(t.errorFull, 'error');
       fetchLobbies();
       return;
     }
 
     if (freshLobby.status === 'playing') {
-        alert(t.started);
+        showToast(t.started, 'info');
         return;
     }
 
-    if (gameType === 'coup') {
-        const userName = user.user_metadata?.username || user.user_metadata?.full_name || 'Player';
-        const userAvatar = user.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.id}`;
-
-        const newPlayer = {
-            id: user.id,
-            name: userName,
-            avatarUrl: userAvatar,
-            coins: 2,
-            cards: [],
-            isDead: false,
-            isHost: false,
-            isReady: true
-        };
-
-        const currentPlayers = Array.isArray(freshLobby.game_state.players) ? freshLobby.game_state.players : [];
-        const newPlayers = [...currentPlayers, newPlayer];
-        const newState = { ...freshLobby.game_state, players: newPlayers };
-
-        const { error } = await supabase
-            .from('lobbies')
-            .update({ game_state: newState })
-            .eq('id', lobby.id);
-
-        if (error) {
-            console.error('Failed to join lobby:', error);
-            return;
-        }
-    }
-
+    // Joining happens on the game page (initGame in all five games)
     router.push(`/game/${gameType}?id=${lobby.id}`);
   };
 
@@ -249,18 +245,16 @@ function PlayContent() {
           if (found.is_private) setSelectedLobby(found);
           else handleJoin(found);
       } else {
-          alert(t.errorNotFound);
+          showToast(t.errorNotFound, 'error');
       }
   };
 
   const getGameIcon = (type: string) => {
       switch(type) {
           case 'battleship': return <Ship className="w-5 h-5" />;
-          case 'mafia': return <Users className="w-5 h-5" />;
           case 'minesweeper': return <Bomb className="w-5 h-5" />;
           case 'flager': return <Flag className="w-5 h-5" />;
           case 'spyfall': return <Fingerprint className="w-5 h-5" />;
-          case 'secret_hitler': return <Skull className="w-5 h-5" />;
           default: return <ScrollText className="w-5 h-5" />;
       }
   };
@@ -270,13 +264,13 @@ function PlayContent() {
         const term = search.toLowerCase();
         const players = getPlayers(l);
         const matchesRoomName = l.name.toLowerCase().includes(term);
-        const matchesPlayerName = players.some((p: any) => (p.name || '').toLowerCase().includes(term));
+        const matchesPlayerName = players.some((p) => (p.name || '').toLowerCase().includes(term));
         const matchesSearch = matchesRoomName || matchesPlayerName;
 
         const gameType = l.game_state.gameType || 'coup';
         const matchesMode = filterMode === 'all' || gameType === filterMode;
 
-        const isAlreadyIn = players.some((p: any) => p.id === currentUserId || p.userId === currentUserId);
+        const isAlreadyIn = players.some((p) => p.id === currentUserId || p.userId === currentUserId);
 
         if ((l.status === 'playing' || l.status === 'finished') && !isAlreadyIn) return false;
 
@@ -297,12 +291,11 @@ function PlayContent() {
       { id: 'flager', label: t.flager },
       { id: 'minesweeper', label: t.minesweeper },
       { id: 'spyfall', label: t.spyfall },
-      { id: 'mafia', label: t.mafia, disabled: true },
   ];
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] font-sans relative overflow-x-hidden flex flex-col selection:bg-[#9e1316] selection:text-white">
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none z-0" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none z-0" />
       <div className="absolute top-0 left-0 w-full h-[60vh] bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none z-0" />
       <div className="absolute top-[10%] left-[5%] w-64 h-64 bg-blue-500/5 rounded-full blur-[80px] pointer-events-none" />
       <div className="absolute bottom-[10%] right-[5%] w-96 h-96 bg-[#9e1316]/5 rounded-full blur-[100px] pointer-events-none" />
@@ -339,6 +332,8 @@ function PlayContent() {
                 {t.join}
              </button>
           </div>
+
+          <SettingsButton />
         </div>
       </header>
 
@@ -380,15 +375,14 @@ function PlayContent() {
                     </div>
                     <div className="flex flex-wrap lg:flex-col gap-1.5 -mx-1 lg:mx-0">
                         {MODES_LIST.map(mode => (
-                            <label key={mode.id} className={`flex items-center gap-3 cursor-pointer group hover:bg-[#F8FAFC] px-3 py-2 rounded-lg transition-colors ${mode.disabled ? 'opacity-50 pointer-events-none' : ''} ${filterMode === mode.id ? 'bg-[#F1F5F9]' : ''}`}>
+                            <label key={mode.id} className={`flex items-center gap-3 cursor-pointer group hover:bg-[#F8FAFC] px-3 py-2 rounded-lg transition-colors ${filterMode === mode.id ? 'bg-[#F1F5F9]' : ''}`}>
                                 <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${filterMode === mode.id ? 'bg-[#1A1F26] border-[#1A1F26]' : 'border-gray-300 bg-white'}`}>
                                     {filterMode === mode.id && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
                                 </div>
                                 <span className={`font-medium text-sm transition-colors ${filterMode === mode.id ? 'text-[#1A1F26]' : 'text-gray-600'}`}>
                                     {mode.label}
                                 </span>
-                                {mode.disabled && <span className="ml-auto text-[9px] font-bold uppercase bg-gray-100 px-1.5 py-0.5 rounded text-gray-400 hidden lg:inline-block">{t.blocked}</span>}
-                                <input type="radio" name="mode" className="hidden" checked={filterMode === mode.id} onChange={() => setFilterMode(mode.id)} disabled={mode.disabled} />
+                                <input type="radio" name="mode" className="hidden" checked={filterMode === mode.id} onChange={() => setFilterMode(mode.id)} />
                             </label>
                         ))}
                     </div>
@@ -416,12 +410,12 @@ function PlayContent() {
                     <div className="grid grid-cols-1 gap-4 pb-20">
                         {processedLobbies.map(lobby => {
                             const players = getPlayers(lobby);
-                            const hostPlayer = players.find((p:any) => p.isHost) || players[0];
+                            const hostPlayer = players.find((p) => p.isHost) || players[0];
                             const maxPlayers = lobby.game_state.settings?.maxPlayers || 6;
                             const isFull = players.length >= maxPlayers;
                             const isPlaying = lobby.status === 'playing';
                             const gameType = lobby.game_state.gameType || 'coup';
-                            const isAlreadyIn = players.some((p: any) => p.id === currentUserId || p.userId === currentUserId);
+                            const isAlreadyIn = players.some((p) => p.id === currentUserId || p.userId === currentUserId);
 
                             return (
                                 <div key={lobby.id} className={`group bg-white border border-[#E6E1DC] p-4 rounded-2xl flex flex-col sm:flex-row items-center gap-4 hover:shadow-lg hover:border-[#9e1316]/20 transition-all duration-300 relative overflow-hidden ${isAlreadyIn ? 'ring-1 ring-emerald-500/50 border-emerald-500/20' : ''}`}>
@@ -481,8 +475,8 @@ function PlayContent() {
 
         {/* Private Room Modal */}
         {selectedLobby && (
-          <div className="fixed inset-0 bg-[#1A1F26]/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-            <div className="bg-white p-6 rounded-[24px] w-full max-w-sm relative shadow-2xl border border-[#E6E1DC] animate-in zoom-in-95">
+          <div className="fixed inset-0 bg-[#1A1F26]/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200" onClick={() => setSelectedLobby(null)}>
+            <div className="bg-white p-6 rounded-[24px] w-full max-w-sm relative shadow-2xl border border-[#E6E1DC] animate-in zoom-in-95" onClick={(e) => e.stopPropagation()}>
               <button onClick={() => setSelectedLobby(null)} className="absolute top-4 right-4 text-gray-400 hover:text-[#1A1F26] transition-colors"><X className="w-5 h-5" /></button>
               <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-[#1A1F26]">
                   <Lock className="w-6 h-6" />
@@ -496,6 +490,8 @@ function PlayContent() {
                     className="w-full bg-[#F8FAFC] border border-gray-200 focus:bg-white focus:border-[#1A1F26] rounded-xl py-3 px-4 text-center text-[#1A1F26] font-bold text-base transition-all outline-none placeholder:text-gray-400"
                     value={passwordInput}
                     onChange={e => setPasswordInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleJoin(selectedLobby, passwordInput); }}
+                    autoFocus
                   />
                   <button
                     onClick={() => handleJoin(selectedLobby, passwordInput)}

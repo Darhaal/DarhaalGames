@@ -1,0 +1,47 @@
+/**
+ * Central application constants — the single source of truth for branding,
+ * URLs and shared configuration. Nothing brand- or environment-specific
+ * should be hardcoded elsewhere.
+ */
+
+/** Platform (product) name shown in the UI */
+export const APP_NAME = 'Darhaal Games';
+
+/** Legal entity that owns the platform */
+export const COMPANY_NAME = 'Okhten Group LLC';
+
+/** Copyright line used in footers */
+export const COPYRIGHT = `© 2026 ${COMPANY_NAME}`;
+
+/** Contact for commercial licensing (see LICENSE) */
+export const CONTACT_EMAIL = 'artem@okhten.com';
+
+/**
+ * Canonical site URL (og-tags, hreflang, sitemap, auth redirect fallback).
+ * Configure via NEXT_PUBLIC_SITE_URL; falls back to the production domain.
+ */
+export const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL || 'https://games.okhten.com';
+
+/** Short brand tagline — the default meta description and OG subtitle */
+export const APP_TAGLINE = {
+  ru: 'Настольные и логические игры онлайн с друзьями — бесплатно и без установки.',
+  en: 'Board and logic games online with friends — free, no download.'
+} as const;
+
+/** Locale served at the bare path; the other locale lives under /en */
+export const DEFAULT_LOCALE = 'ru' as const;
+
+/** Default generated avatar for a given seed (user id, nickname, etc.) */
+export const defaultAvatar = (seed: string) =>
+  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed)}&backgroundColor=transparent`;
+
+/** Room code alphabet and length (must match the unique index expectations) */
+export const ROOM_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+export const ROOM_CODE_LENGTH = 6;
+
+/** Generate a random room code */
+export const generateRoomCode = () =>
+  Array.from({ length: ROOM_CODE_LENGTH }, () =>
+    ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)]
+  ).join('');

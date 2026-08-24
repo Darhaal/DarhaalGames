@@ -1,4 +1,4 @@
-import { Target, Zap, Shield, Trophy, MousePointer2, Move, Eye, Flag, Ship, RefreshCw, Crosshair, AlertTriangle, Coins, Search, Clock, Map as MapIcon } from 'lucide-react';
+import { Target, Zap, Shield, Trophy, MousePointer2, Eye, Flag, Ship, RefreshCw, Crosshair, AlertTriangle, Search, Clock, Map as MapIcon } from 'lucide-react';
 import { GameRulesData } from '@/components/GameRulesModal';
 
 export const GAME_RULES: Record<'ru' | 'en', Record<string, GameRulesData>> = {
@@ -28,9 +28,9 @@ export const GAME_RULES: Record<'ru' | 'en', Record<string, GameRulesData>> = {
           title: 'Правила расстановки',
           icon: MapIcon,
           content: [
-            'Корабли можно ставить горизонтально или вертикально. Используйте клавишу R или Пробел при перетаскивании для поворота.',
-            'ВАЖНОЕ ПРАВИЛО: Между кораблями должно быть расстояние минимум в одну клетку. Они не могут касаться друг друга даже углами.',
-            'Вы можете расставить флот вручную для создания хитрых ловушек или использовать кнопку "Авто" для быстрой случайной генерации позиций.'
+            'Расстановка: перетащите корабль с верфи на поле — или выберите его кликом и кликните по клетке. Клик по уже поставленному кораблю берёт его обратно.',
+            'Поворот: клавиша R / Пробел / Q, правый клик по полю или кнопка поворота. Кнопка «Авто» расставит флот случайно.',
+            'ВАЖНОЕ ПРАВИЛО: между кораблями должно быть расстояние минимум в одну клетку. Они не могут касаться друг друга даже углами.'
           ],
           type: 'list'
         },
@@ -114,9 +114,10 @@ export const GAME_RULES: Record<'ru' | 'en', Record<string, GameRulesData>> = {
           title: 'Управление (PRO)',
           icon: MousePointer2,
           content: [
-            'ЛКМ: Открыть клетку.',
-            'ПКМ (или долгое нажатие на телефоне): Поставить флаг, чтобы пометить мину.',
-            'СКМ (Колесико) или Двойной клик (на телефонах): АККОРД. Если вокруг открытой цифры уже стоит правильное количество флагов, эта функция мгновенно откроет все остальные закрытые клетки вокруг. Это главный инструмент для скоростной игры!'
+            'ЛКМ: открыть клетку.',
+            'ПКМ (или долгое нажатие на телефоне): поставить/снять флаг.',
+            'АККОРД: клик по открытой цифре (или СКМ). Если вокруг цифры стоит ровно столько флагов, сколько она показывает, мгновенно откроются все остальные клетки вокруг. Главный инструмент скоростной игры!',
+            'Навигация по большому полю: зажмите ЛКМ и тяните для панорамирования, WASD — перемещение, «+»/«−» или кнопки лупы — масштаб.'
           ],
           type: 'list'
         },
@@ -224,9 +225,9 @@ export const GAME_RULES: Record<'ru' | 'en', Record<string, GameRulesData>> = {
           title: 'Deployment Rules',
           icon: MapIcon,
           content: [
-            'Ships can be placed horizontally or vertically (Press "R" or Spacebar while dragging).',
-            'CRITICAL: Ships cannot touch each other, not even diagonally. A 1-cell gap is mandatory.',
-            'Use "Auto" for random placement or deploy manually for strategic defense.'
+            'Placement: drag a ship from the shipyard onto the grid — or select it and click a cell. Clicking a placed ship picks it back up.',
+            'Rotate: R / Spacebar / Q, right-click on the grid, or the rotate button. "Auto" deploys the fleet randomly.',
+            'CRITICAL: Ships cannot touch each other, not even diagonally. A 1-cell gap is mandatory.'
           ],
           type: 'list'
         },
@@ -309,9 +310,10 @@ export const GAME_RULES: Record<'ru' | 'en', Record<string, GameRulesData>> = {
           title: 'Pro Controls',
           icon: MousePointer2,
           content: [
-            'Left Click: Open cell.',
-            'Right Click (or Long Press): Flag a mine.',
-            'Middle Click (Wheel) or Double Tap: CHORD. If a number has the correct amount of flags around it, this opens all remaining neighbors instantly. Essential for speedruns.'
+            'Left Click: open a cell.',
+            'Right Click (or Long Press on mobile): place/remove a flag.',
+            'CHORD: click an opened number (or Middle Click). When the number has exactly that many flags around it, all remaining neighbors open instantly. Essential for speedruns!',
+            'Board navigation: hold Left Click and drag to pan, WASD to move, "+"/"-" or the magnifier buttons to zoom.'
           ],
           type: 'list'
         },

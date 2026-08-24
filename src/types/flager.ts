@@ -22,16 +22,16 @@ export interface FlagerPlayerState {
   avatarUrl: string;
   isHost: boolean;
 
-  // Текущее состояние
+  // Current state
   score: number;
-  guesses: string[]; // Коды стран, которые игрок вводил в текущем раунде
+  guesses: string[]; // Country codes the player entered in the current round
   hasFinishedRound: boolean;
   roundScore: number;
 
-  // История
+  // History
   history: RoundResult[];
 
-  // Синхронизация между раундами
+  // Between-round synchronization
   isReadyForNextRound: boolean;
 }
 
@@ -39,14 +39,14 @@ export interface FlagerState {
   players: FlagerPlayerState[];
   status: FlagerStatus;
 
-  targetChain: string[]; // Массив кодов стран на всю игру (ответы)
+  targetChain: string[]; // Country codes for the whole game (the answers)
   currentRoundIndex: number;
 
-  roundStartTime: number; // Timestamp начала раунда для таймера
+  roundStartTime: number; // Round start timestamp for the timer
   lastActionTime: number;
   version: number;
 
-  // Уведомления для игроков (например, о выходе)
+  // Player notifications (e.g. someone left)
   notifications?: FlagerNotification[];
 
   gameType: 'flager';

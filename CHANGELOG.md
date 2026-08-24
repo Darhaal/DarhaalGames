@@ -1,0 +1,256 @@
+# Changelog
+
+All notable changes to Darhaal Games. The in-app changelog (RU/EN) lives in
+[`src/constants/version.ts`](src/constants/version.ts) — keep both in sync when
+releasing.
+
+Format: [Semantic Versioning](https://semver.org/). Types: **major** = platform
+milestone, **minor** = new game mode / feature, **patch** = fixes & improvements.
+
+## [2.1.0] — 2026-08-20 (minor) — **New Home**
+
+> The platform moves to its own domain and gains a public, crawlable surface.
+
+### Added
+- **New domain**: the platform now lives at `games.okhten.com`; the previous
+  deployment URL redirects to it.
+- **Public game pages** with descriptions, rules and screenshots — reachable
+  without signing in, so a game can be shared as a plain link.
+- Search-engine groundwork: per-page titles and descriptions, social preview
+  cards, `robots.txt`, `sitemap.xml` and a web app manifest.
+
+### Changed
+- **Modular UI architecture**: shared layout, header and localization extracted
+  into reusable modules instead of being repeated per page.
+- Faster first load — less JavaScript shipped for pages that do not need it.
+- Refreshed navigation between the lobby, game and statistics screens.
+
+## [2.0.4] — 2026-08-05 (patch)
+- Stability on weak connections: rejoin your room without losing your seat, with
+  clear notifications when the connection drops.
+
+## [2.0.3] — 2026-07-27 (patch)
+- Mobile: larger tap targets, fixed layout on narrow screens, and refined
+  gestures in Minesweeper and Battleship.
+
+## [2.0.2] — 2026-07-18 (patch)
+- Faster room list and statistics page, with reduced traffic during match
+  synchronization.
+
+## [2.0.1] — 2026-07-11 (patch) — Polish
+- The avatar-delete **native `confirm()` replaced with an in-app confirmation
+  dialog** (Escape / backdrop to cancel) — the last native dialog is gone.
+- **Zero-warning codebase**: remaining ESLint warnings resolved (unused
+  imports/vars removed; intentional `exhaustive-deps` effects documented).
+- Removed dead code and unused props.
+
+## [2.0.0] — 2026-07-09 (major) — 🚀 **Platform 2.0**
+
+> A full-codebase audit plus a round of hardening and polish. Consolidates the
+> initial 2.0.0 launch and its same-day follow-ups (branding, keyboard UX, input
+> fixes, controls & rules audit) into one release.
+
+### Security
+- Room passwords **never leave the database**: server-side verification via the
+  `join_lobby_check` RPC; the lobby list no longer selects the `password` column.
+- **Optimistic locking** for every game-state write (CAS RPC `update_game_state`)
+  with automatic client re-sync on version conflicts.
+- Username → email sign-in resolution behind the `get_login_email` RPC; RLS
+  enabled on `profiles`; owner-only statistics reads; schema repair
+  (`profiles.username`, signup trigger, user backfill).
+- Credentials strictly from environment variables; 8 dependency vulnerabilities
+  fixed; Next.js 16.2.10. All config centralized in `src/constants/app.ts`.
+
+### Games & UX
+- **Honest statistics in every game** (Spyfall recorded for the first time;
+  Flager solo/multi parity; real match durations for Coup/Battleship).
+- **Join-by-link for Coup**, a "game already in progress" screen for late
+  visitors, **forgot-password** flow.
+- **Keyboard controls**: Escape closes dismissible dialogs, Enter submits the
+  private-room password, arrow keys navigate the Flager suggestions, Battleship
+  rotate keys; dialogs also close on backdrop click.
+- **Minesweeper chord** on a left-click/tap of a number (open remaining
+  neighbors when the flag count matches) + keyboard zoom.
+- **Sound**: synthesized WebAudio cues wired to the volume setting.
+  **Toasts** replace every native `alert()`.
+- **Branding**: platform *Darhaal Games*, a product of **Okhten Group LLC**
+  (LICENSE, footers, README). Settings reachable from every page; the panel
+  renders through a portal so it is never clipped by blurred headers.
+
+### Engineering
+- **Zero ESLint errors** (from 82): all `any` eliminated, `useLang` via
+  `useSyncExternalStore`, nested render components hoisted.
+- **Shared sync core** `hooks/core/useLobbySync` deduplicated out of all five
+  game hooks (−350 lines). Pure game logic extracted to `src/lib/gameLogic/`.
+- **Unit tests** (vitest) for placement/fleet, mines/flood-fill/chord,
+  deck/roles, scoring. CI: build + blocking lint + tests. `next/image` everywhere.
+- Full documentation set (`docs/`), SQL migrations.
+
+### Fixed (highlights)
+- Sign-in by email; Battleship waiting-lobby leave counted as a win; Minesweeper
+  losses not recorded / all-lost game never finishing; Minesweeper cell clicks
+  swallowed by pointer capture; Coup turn-order corruption on leave; multi-client
+  timer races; Spyfall vote-timer overlap; room-code generation & collisions;
+  the dead background-texture CDN; the settings panel clipped on secondary pages.
+
+## [1.9.3] — 2026-06-22 (patch)
+- Rule and hint copy fixes, with typos corrected in the Russian localization.
+
+## [1.9.2] — 2026-06-10 (patch)
+- Fixed closing the rules dialog on mobile and improved the layout of long
+  descriptions.
+
+## [1.9.1] — 2026-06-01 (patch)
+- Rules open straight from the lobby, with short hints added for newcomers.
+
+## [1.9.0] — 2026-05-14 (minor) — **Rules**
+- Built-in rules for every game: a single dialog covering the goal, turn order
+  and win conditions in Russian and English.
+
+## [1.8.4] — 2026-05-06 (patch)
+- Rare locations rebalanced and duplicate entries removed from the packs.
+
+## [1.8.3] — 2026-04-28 (patch)
+- Fixed pack selection when a round is restarted.
+
+## [1.8.2] — 2026-04-20 (patch)
+- Improved role card readability and refreshed the location icons.
+
+## [1.8.1] — 2026-04-13 (patch)
+- Minor Spy Mode fixes and voting stability.
+
+## [1.8.0] — 2026-04-08 (minor) — **Theme Packs**
+- New location sets for Spy Mode: school, university, office, horror, gaming,
+  USA, USSR and extended general packs.
+
+## [1.7.5] — 2026-03-31 (patch)
+- Fixed rare cases where a room stayed in the list after every player had left.
+
+## [1.7.4] — 2026-03-25 (patch)
+- Faster room list updates and a corrected player counter.
+
+## [1.7.3] — 2026-03-20 (patch)
+- Copying the room code now works in every browser.
+
+## [1.7.2] — 2026-03-17 (patch)
+- Fixed host transfer when the room creator leaves.
+
+## [1.7.1] — 2026-03-14 (patch)
+- Minor private room and list filter fixes.
+
+## [1.7.0] — 2026-03-12 (minor) — **Lobby**
+- A reworked lobby: private rooms with a password, short invite codes, per-game
+  filters, and automatic removal of disconnected players with a reconnect grace
+  period.
+
+## [1.6.4] — 2026-03-06 (patch)
+- Fixed the average match duration calculation.
+
+## [1.6.3] — 2026-03-01 (patch)
+- Avatars: a file size limit and a clear error message on upload.
+
+## [1.6.2] — 2026-02-25 (patch)
+- Fixed statistics display for new players.
+
+## [1.6.1] — 2026-02-22 (patch)
+- Minor profile and settings fixes.
+
+## [1.6.0] — 2026-02-20 (minor) — **Profile**
+- Personal profile and achievements: a per-game statistics page, custom avatar
+  uploads, and generated avatars for new accounts.
+
+## [1.5.4] — 2026-02-08 (patch)
+- Bug fixes, improved lobby performance, and additional cards and packs for Spy Mode.
+
+## [1.5.3] — 2026-02-07 (patch)
+- Reworked settings and achievements system, minor bug fixes, and overall stability and performance improvements.
+
+## [1.5.2] — 2026-02-06 (patch)
+- Minor bug fixes, reworked and simplified game rules, improved readability and design.
+
+## [1.5.1] — 2026-02-06 (patch)
+- Fixed Spyfall bugs, resolved rare crashes, and improved match stability and state synchronization.
+
+## [1.5.0] — 2026-02-05 (minor) — **Spy Mode**
+- Added Spy Mode, refreshed the UI visual style, improved new player onboarding, and fixed bugs.
+
+## [1.4.5] — 2026-02-03 (patch)
+- Minor bug fixes, improved UI responsiveness and click handling.
+
+## [1.4.4] — 2026-02-03 (patch)
+- Multiplayer fixes, improved lobby and timer stability.
+
+## [1.4.3] — 2026-02-03 (patch)
+- UX improvements for Minesweeper, animation optimizations.
+
+## [1.4.2] — 2026-02-03 (patch)
+- Fixed board generation issues and flag logic.
+
+## [1.4.1] — 2026-02-03 (patch)
+- Performance and networking optimizations.
+
+## [1.4.0] — 2026-02-03 (minor) — **Minesweeper**
+- Added Minesweeper: multiplayer, flags and board zoom.
+
+## [1.3.5] — 2026-02-02 (patch)
+- Localization fixes and question correctness.
+
+## [1.3.4] — 2026-02-02 (patch)
+- Quiz UI and animation smoothness improvements.
+
+## [1.3.3] — 2026-02-02 (patch)
+- Pixel Match optimizations and faster loading.
+
+## [1.3.2] — 2026-02-01 (patch)
+- Fixed rare score calculation issues.
+
+## [1.3.1] — 2026-02-01 (patch)
+- Minor bug fixes and stability improvements.
+
+## [1.3.0] — 2026-02-01 (minor) — **Flager**
+- Added flag quiz with Pixel Match mechanic.
+
+## [1.2.5] — 2026-01-31 (patch)
+- Drag&Drop and network sync optimizations.
+
+## [1.2.4] — 2026-01-31 (patch)
+- Visual bug fixes and improved responsiveness.
+
+## [1.2.3] — 2026-01-31 (patch)
+- Fixed ship placement issues.
+
+## [1.2.2] — 2026-01-30 (patch)
+- Match and timer stabilization.
+
+## [1.2.1] — 2026-01-30 (patch)
+- Minor bug fixes and UI improvements.
+
+## [1.2.0] — 2026-01-30 (minor) — **Battleship**
+- Added real-time Battleship.
+
+## [1.1.5] — 2026-01-29 (patch)
+- Role balance and card logic fixes.
+
+## [1.1.4] — 2026-01-29 (patch)
+- Network desync fixes.
+
+## [1.1.3] — 2026-01-29 (patch)
+- UI and match stability improvements.
+
+## [1.1.2] — 2026-01-28 (patch)
+- Fixed round ending issues.
+
+## [1.1.1] — 2026-01-28 (patch)
+- Minor bug fixes and optimizations.
+
+## [1.1.0] — 2026-01-28 (minor) — **Coup**
+- Added the card game Coup.
+
+## [1.0.2] — 2026-01-27 (patch)
+- Added RU/EN localization and audio settings.
+
+## [1.0.1] — 2026-01-27 (patch)
+- Authentication and lobby fixes.
+
+## [1.0.0] — 2026-01-27 (init) — **Launch**
+- Initial platform release: accounts, profiles and lobbies.

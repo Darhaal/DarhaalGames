@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { LogOut, HelpCircle, Clock, Book } from 'lucide-react';
+import { LogOut, HelpCircle, Book } from 'lucide-react';
 
 interface GameHeaderProps {
   title: string;

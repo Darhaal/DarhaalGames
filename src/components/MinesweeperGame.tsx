@@ -1,17 +1,18 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import Image from 'next/image';
+import React, { useState, useEffect, useRef, memo } from 'react';
 import {
-  Bomb, Flag, Trophy, Clock,
-  ZoomIn, ZoomOut, LogOut, HelpCircle, X,
-  MousePointer2, Zap, Maximize, Loader2, Eye, Move,
-  Keyboard, Skull, UserX
+  Bomb, Flag, Trophy,
+  ZoomIn, ZoomOut, Loader2, Eye,
+  MousePointer2, Zap, Skull, UserX
 } from 'lucide-react';
 import { MinesweeperState, MinesweeperPlayer, Cell } from '@/types/minesweeper';
-import { useRouter } from 'next/navigation';
 import GameHeader from './GameHeader';
 import GameRulesModal from './GameRulesModal';
 import { GAME_RULES } from '@/constants/rules';
+import { playSfx } from '@/lib/sound';
+import { useEscape } from '@/hooks/useEscape';
 
 // --- THEME & STYLES ---
 const COLORS = {
@@ -92,10 +93,9 @@ interface MinesweeperGameProps {
 }
 
 const CellComponent = memo(({
-    cell, onClick, onContextMenu, onAuxClick, onPointerDown, onPointerUp, onPointerLeave
+    cell, onContextMenu, onAuxClick, onPointerDown, onPointerUp, onPointerLeave
 }: {
     cell: Cell,
-    onClick: () => void,
     onContextMenu: (e: React.MouseEvent) => void,
     onAuxClick: (e: React.MouseEvent) => void,
     onPointerDown: (e: React.PointerEvent) => void,
@@ -120,7 +120,6 @@ const CellComponent = memo(({
 
   return (
     <div
-      onClick={onClick}
       onContextMenu={onContextMenu}
       onAuxClick={onAuxClick}
       onPointerDown={onPointerDown}
@@ -135,7 +134,17 @@ const CellComponent = memo(({
 CellComponent.displayName = 'Cell';
 
 // --- BOARD VIEW ---
-const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouchModeFlag }: any) => {
+interface BoardViewProps {
+  player: MinesweeperPlayer;
+  isMe: boolean;
+  onReveal: (x: number, y: number) => void;
+  onFlag: (x: number, y: number) => void;
+  onChord: (x: number, y: number) => void;
+  scale?: number;
+  isTouchModeFlag?: boolean;
+}
+
+const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouchModeFlag }: BoardViewProps) => {
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
@@ -149,6 +158,11 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
   // Long press logic
   const longPressTimer = useRef<NodeJS.Timeout | null>(null);
   const isLongPress = useRef(false);
+
+  // Cell under the initial pointerdown. Cell activation happens on pointerup:
+  // the pan container takes pointer capture, which retargets the composed
+  // `click` event to the container — a cell-level onClick never fires.
+  const pressedCell = useRef<Cell | null>(null);
 
   const clampOffset = (newX: number, newY: number, z: number) => {
       if (!player.board[0]) return { x: 0, y: 0 };
@@ -175,18 +189,25 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
               case 'KeyS': newY -= step; break;
               case 'KeyA': newX += step; break;
               case 'KeyD': newX -= step; break;
+              case 'Equal':
+              case 'NumpadAdd': setZoom(z => Math.min(4, z + 0.25)); return;
+              case 'Minus':
+              case 'NumpadSubtract': setZoom(z => Math.max(0.5, z - 0.25)); return;
               default: return;
           }
           setOffset(clampOffset(newX, newY, zoom));
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- clampOffset is recreated each render; re-binding the key listener every render is unnecessary
   }, [isMe, zoom, offset, player.status]);
 
   // --- MOUSE / TOUCH HANDLERS ---
 
   const handlePointerDown = (e: React.PointerEvent, cell: Cell) => {
       if (!isMe || player.status !== 'playing') return;
+
+      pressedCell.current = cell;
 
       // Start Long Press Timer (for mobile right click)
       isLongPress.current = false;
@@ -199,34 +220,17 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
       }
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
+  const handlePointerUp = () => {
       if (longPressTimer.current) {
           clearTimeout(longPressTimer.current);
           longPressTimer.current = null;
       }
   };
 
-  const handlePointerLeave = (e: React.PointerEvent) => {
+  const handlePointerLeave = () => {
       if (longPressTimer.current) {
           clearTimeout(longPressTimer.current);
           longPressTimer.current = null;
-      }
-  };
-
-  const handleCellClick = (cell: Cell) => {
-      if (hasMoved.current || isLongPress.current) return;
-      if (!isMe || player.status !== 'playing') return;
-
-      if (cell.isOpen) {
-          // Left click on open cell does nothing usually, chords are MMB or Double
-      } else {
-          if (isTouchModeFlag) {
-              onFlag(cell.x, cell.y);
-          } else {
-              if (!cell.isFlagged) {
-                  onReveal(cell.x, cell.y);
-              }
-          }
       }
   };
 
@@ -253,7 +257,7 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
       hasMoved.current = false;
       dragStart.current = { x: e.clientX, y: e.clientY };
       startOffset.current = { ...offset };
-      containerRef.current?.setPointerCapture(e.pointerId);
+      try { containerRef.current?.setPointerCapture(e.pointerId); } catch { /* synthetic pointer */ }
   };
 
   const onContainerPointerMove = (e: React.PointerEvent) => {
@@ -268,7 +272,33 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
 
   const onContainerPointerUp = (e: React.PointerEvent) => {
       isDragging.current = false;
-      containerRef.current?.releasePointerCapture(e.pointerId);
+      try { containerRef.current?.releasePointerCapture(e.pointerId); } catch { /* no capture */ }
+
+      // Pointer capture retargets pointerup to the container, so the cell-level
+      // handler never fires — clear the touch long-press timer here as well
+      if (longPressTimer.current) {
+          clearTimeout(longPressTimer.current);
+          longPressTimer.current = null;
+      }
+
+      // Activate the pressed cell (left button / touch tap only)
+      const cell = pressedCell.current;
+      pressedCell.current = null;
+      if (e.button !== 0 || !cell) return;
+      if (hasMoved.current || isLongPress.current) return;
+      if (!isMe || player.status !== 'playing') return;
+
+      if (!cell.isOpen) {
+          if (isTouchModeFlag) {
+              onFlag(cell.x, cell.y);
+          } else if (!cell.isFlagged) {
+              onReveal(cell.x, cell.y);
+          }
+      } else if (cell.neighborCount > 0) {
+          // CHORD: click/tap on an opened number — when the right amount of
+          // flags surrounds it, the hook opens all remaining neighbors
+          onChord(cell.x, cell.y);
+      }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -288,7 +318,7 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
         <div className="shrink-0 p-3 border-b border-[#F1F5F9] flex justify-between items-center bg-white/90 backdrop-blur-md z-20">
             <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-gray-100 border border-gray-200 overflow-hidden relative">
-                    <img src={player.avatarUrl} className="w-full h-full object-cover" />
+                    <Image src={player.avatarUrl} alt="" width={40} height={40} className="w-full h-full object-cover" />
                     {player.status === 'won' && <div className="absolute inset-0 bg-emerald-500/80 flex items-center justify-center animate-in zoom-in"><Trophy className="w-5 h-5 text-white" /></div>}
                     {player.status === 'lost' && <div className="absolute inset-0 bg-red-500/80 flex items-center justify-center animate-in zoom-in"><Skull className="w-5 h-5 text-white" /></div>}
                     {player.status === 'left' && <div className="absolute inset-0 bg-gray-500/80 flex items-center justify-center animate-in zoom-in"><UserX className="w-5 h-5 text-white" /></div>}
@@ -333,7 +363,6 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
                         <CellComponent
                             key={`${x}-${y}`}
                             cell={cell}
-                            onClick={() => handleCellClick(cell)}
                             onContextMenu={(e) => handleContextMenu(e, cell)}
                             onAuxClick={(e) => handleAuxClick(e, cell)}
                             onPointerDown={(e) => handlePointerDown(e, cell)}
@@ -358,9 +387,9 @@ const BoardView = ({ player, isMe, onReveal, onFlag, onChord, scale = 1, isTouch
 };
 
 export default function MinesweeperGame({ gameState, userId, revealCell, toggleFlag, chordCell, startGame, leaveGame, handleTimeout, lang }: MinesweeperGameProps) {
-  const router = useRouter();
   const [showRules, setShowRules] = useState(false);
-  const [showResults, setShowResults] = useState(false);
+  // Results manually dismissed for a specific match (keyed by the match startTime)
+  const [resultsDismissedFor, setResultsDismissedFor] = useState<number | null>(null);
   const t = UI_TEXT[lang];
   const [timeLeft, setTimeLeft] = useState(gameState.settings.timeLimit || 600);
   const [isTouchModeFlag, setIsTouchModeFlag] = useState(false);
@@ -369,9 +398,17 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
   const me = gameState.players[userId];
   const opponents = players.filter(p => p.id !== userId);
 
+  // Derived state: show results when the match is finished and not dismissed
+  const showResults = gameState.status === 'finished' && resultsDismissedFor !== gameState.startTime;
+
+  // Escape dismisses the results overlay (back to viewing the board)
+  useEscape(showResults, () => setResultsDismissedFor(gameState.startTime));
+
+  // Own game outcome sound
   useEffect(() => {
-      if (gameState.status === 'finished') setShowResults(true);
-  }, [gameState.status]);
+      if (me?.status === 'won') playSfx('win');
+      else if (me?.status === 'lost') playSfx('lose');
+  }, [me?.status]);
 
   useEffect(() => {
       if (gameState.status !== 'playing') return;
@@ -382,7 +419,7 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
           if (remaining === 0 && me?.status === 'playing' && handleTimeout) handleTimeout();
       }, 1000);
       return () => clearInterval(interval);
-  }, [gameState.status, gameState.startTime, handleTimeout]);
+  }, [gameState.status, gameState.startTime, gameState.settings.timeLimit, me?.status, handleTimeout]);
 
   const getSortedPlayers = () => {
       return [...players].sort((a, b) => {
@@ -404,7 +441,7 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
 
   return (
     <div className="h-screen bg-[#F8FAFC] flex flex-col font-sans overflow-hidden">
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none" />
+        <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none" />
 
         <GameRulesModal
             isOpen={showRules}
@@ -418,7 +455,7 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
             icon={Bomb}
             timeLeft={timeLeft}
             showTime={true}
-            onLeave={() => { leaveGame(); router.push('/'); }}
+            onLeave={leaveGame}
             onShowRules={() => setShowRules(true)}
             lang={lang}
             accentColor="text-red-600"
@@ -437,7 +474,7 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
                 </div>
             )}
             {gameState.status === 'finished' && !showResults && (
-                <button onClick={() => setShowResults(true)} className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold uppercase text-xs shadow-lg animate-in zoom-in hover:bg-emerald-700">
+                <button onClick={() => setResultsDismissedFor(null)} className="bg-emerald-600 text-white px-6 py-3 rounded-2xl font-bold uppercase text-xs shadow-lg animate-in zoom-in hover:bg-emerald-700">
                     {t.showResults}
                 </button>
             )}
@@ -473,13 +510,13 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
             <div className="fixed inset-0 z-50 bg-[#1A1F26]/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
                 <div className="bg-white rounded-[40px] overflow-hidden shadow-2xl max-w-2xl w-full border border-[#E6E1DC] flex flex-col max-h-[85vh] animate-in zoom-in-95">
                     <div className="bg-[#1A1F26] p-8 text-white text-center relative shrink-0">
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
+                        <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-20" />
                         <h2 className="text-4xl font-black uppercase tracking-widest text-white mb-2 relative z-10">
                             {gameState.winner ? t.victory : t.defeat}
                         </h2>
                         {gameState.winner && <div className="text-[#FBBF24] font-bold flex justify-center gap-2 items-center text-sm uppercase tracking-wider relative z-10"><Trophy className="w-4 h-4"/> {gameState.winner}</div>}
 
-                        <button onClick={() => setShowResults(false)} className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors z-20" title={t.viewBoard}>
+                        <button onClick={() => setResultsDismissedFor(gameState.startTime)} className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors z-20" title={t.viewBoard}>
                             <Eye className="w-5 h-5 text-white" />
                         </button>
                     </div>
@@ -498,7 +535,7 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
                                 {getSortedPlayers().map((p, idx) => (
                                     <tr key={p.id} className={`group transition-colors hover:bg-white ${p.id === userId ? 'bg-white' : ''}`}>
                                         <td className="py-4 pl-4 font-bold text-[#1A1F26] flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden border border-gray-100"><img src={p.avatarUrl} className="w-full h-full object-cover"/></div>
+                                            <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden border border-gray-100"><Image src={p.avatarUrl} alt="" width={40} height={40} className="w-full h-full object-cover"/></div>
                                             <div>
                                                 <div className="text-sm">{p.name}</div>
                                                 {idx === 0 && gameState.winner && <div className="text-[9px] text-[#FBBF24] font-black uppercase flex items-center gap-1"><Trophy className="w-3 h-3"/> Winner</div>}
@@ -528,7 +565,8 @@ export default function MinesweeperGame({ gameState, userId, revealCell, toggleF
                     </div>
 
                     <div className="p-6 bg-white border-t border-[#E6E1DC] flex justify-center shrink-0">
-                        <button onClick={() => { leaveGame(); router.push('/'); }} className="w-full max-w-sm py-4 bg-[#1A1F26] text-white rounded-2xl font-black uppercase tracking-widest hover:bg-[#9e1316] transition-colors shadow-xl shadow-[#1A1F26]/10">
+                        {/* leaveGame (handleLeave) awaits the DB write and navigates by itself */}
+                        <button onClick={leaveGame} className="w-full max-w-sm py-4 bg-[#1A1F26] text-white rounded-2xl font-black uppercase tracking-widest hover:bg-[#9e1316] transition-colors shadow-xl shadow-[#1A1F26]/10">
                             {t.leave}
                         </button>
                     </div>

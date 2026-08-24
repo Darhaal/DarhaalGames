@@ -1,17 +1,19 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import Image from 'next/image';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Coins, Crown, Shield,
-  LogOut, Book, HelpCircle,
-  Swords, Skull, RefreshCw, AlertTriangle, ThumbsUp, AlertOctagon, CheckCircle, Timer, ScrollText
+  Swords, Skull, RefreshCw, AlertTriangle, ThumbsUp, AlertOctagon, CheckCircle, ScrollText
 } from 'lucide-react';
 import { DICTIONARY } from '@/constants/coup';
-import { Role, Lang, GameState, Player } from '@/types/coup';
+import { Lang, GameState } from '@/types/coup';
 import { GameCard, ActionBtn, GuideModal, LogPanel } from './CoupComponents';
 import GameHeader from './GameHeader';
 import GameRulesModal from './GameRulesModal';
 import { GAME_RULES } from '@/constants/rules';
+import { useEscape } from '@/hooks/useEscape';
+import { playSfx } from '@/lib/sound';
 
 interface CoupGameProps {
   gameState: GameState;
@@ -35,13 +37,14 @@ export default function CoupGame({
   const [selectedExchangeIndices, setSelectedExchangeIndices] = useState<number[]>([]);
   const [timeLeft, setTimeLeft] = useState(60);
 
-  const [hasPassedLocal, setHasPassedLocal] = useState(false);
+  // "Passed" is keyed to the specific phase/action: when the phase changes the key
+  // changes too, so the flag resets automatically (no setState in an effect)
+  const [passedForKey, setPassedForKey] = useState<string | null>(null);
 
   const players = gameState.players || [];
   const me = players.find(p => p.id === userId);
   const currentPlayer = players[gameState.turnIndex];
   const isMyTurn = currentPlayer?.id === userId;
-  const isHost = players.find(p => p.id === userId)?.isHost;
 
   const t = DICTIONARY[lang].ui;
   const actionsT = DICTIONARY[lang].actions;
@@ -59,9 +62,17 @@ export default function CoupGame({
   const isReactionPhase = phase === 'waiting_for_challenges' || phase === 'waiting_for_blocks' || phase === 'waiting_for_block_challenges';
   const isBlocker = gameState.currentAction?.blockedBy === userId;
 
+  // Escape cancels target selection (coup / steal / assassinate)
+  useEscape(!!targetMode, () => setTargetMode(null));
+
+  const phaseKey = `${gameState.phase}|${gameState.currentAction?.type}|${gameState.currentAction?.player}|${gameState.turnIndex}`;
+  const hasPassedLocal = passedForKey === phaseKey;
+
+  // Guard against one client firing the timeout multiple times
+  const timeoutFiredRef = useRef(false);
   useEffect(() => {
-      setHasPassedLocal(false);
-  }, [gameState.phase, gameState.currentAction?.type, gameState.currentAction?.player, gameState.turnIndex]);
+      timeoutFiredRef.current = false;
+  }, [gameState.turnDeadline, gameState.phase]);
 
   useEffect(() => {
       if (gameState.status !== 'playing') return;
@@ -70,18 +81,38 @@ export default function CoupGame({
               const remaining = Math.max(0, Math.ceil((gameState.turnDeadline - Date.now()) / 1000));
               setTimeLeft(remaining);
 
-              if (remaining === 0 && skipTurn) {
+              if (remaining === 0 && skipTurn && !timeoutFiredRef.current) {
+                  // Phases with a single responsible player — that player resolves the timeout
                   if ((phase === 'choosing_action' && isMyTurn) || isLosing || isExchanging) {
+                      timeoutFiredRef.current = true;
                       skipTurn();
                   }
-                  else if (isReactionPhase && !hasPassedLocal && !isActor && !isBlocker) {
-                      skipTurn();
+                  else if (isReactionPhase) {
+                      // One primary writer instead of a race between all clients:
+                      // in reaction phases it is the actor; for block challenges — the blocker.
+                      // Everyone else acts as a 5s-delayed backup (if the primary disconnected).
+                      const overdueMs = Date.now() - gameState.turnDeadline;
+                      const isPrimary = phase === 'waiting_for_block_challenges' ? isBlocker : isActor;
+                      const isBackup = overdueMs > 5000 && !hasPassedLocal && !isActor && !isBlocker;
+
+                      if (isPrimary || isBackup) {
+                          timeoutFiredRef.current = true;
+                          skipTurn();
+                      }
                   }
               }
           }
       }, 500);
       return () => clearInterval(interval);
   }, [gameState.turnDeadline, gameState.status, phase, isMyTurn, isLosing, isExchanging, skipTurn, isReactionPhase, hasPassedLocal, isActor, isBlocker]);
+
+  // "Your turn" and end-of-game sounds
+  useEffect(() => {
+      if (gameState.status === 'playing' && isMyTurn && phase === 'choosing_action') playSfx('notify');
+  }, [isMyTurn, phase, gameState.status]);
+  useEffect(() => {
+      if (gameState.winner) playSfx(gameState.winnerId === userId ? 'win' : 'lose');
+  }, [gameState.winner, gameState.winnerId, userId]);
 
   const showChallengeBtn = !hasPassedLocal && isReactionPhase && !isActor && !isBlocker && (
       phase === 'waiting_for_challenges' ||
@@ -96,7 +127,7 @@ export default function CoupGame({
   const showPassBtn = !hasPassedLocal && isReactionPhase && !isActor && !isBlocker;
 
   const handleAction = (action: string) => {
-    if (['coup', 'steal', 'assassinate'].includes(action)) setTargetMode(action as any);
+    if (action === 'coup' || action === 'steal' || action === 'assassinate') setTargetMode(action);
     else performAction(action);
   };
 
@@ -118,7 +149,7 @@ export default function CoupGame({
   };
 
   const handlePass = () => {
-      setHasPassedLocal(true);
+      setPassedForKey(phaseKey);
       pass();
   };
 
@@ -131,7 +162,7 @@ export default function CoupGame({
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans overflow-hidden relative">
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
+      <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-50 mix-blend-overlay pointer-events-none" />
       {activeModal === 'guide' && <GuideModal onClose={() => setActiveModal(null)} lang={lang} />}
 
       <GameRulesModal
@@ -171,7 +202,7 @@ export default function CoupGame({
                       ${p.isDead ? 'grayscale opacity-50 cursor-not-allowed' : ''}
                   `}
               >
-                <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-sm mb-2"><img src={p.avatarUrl} className="w-full h-full object-cover" /></div>
+                <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-sm mb-2"><Image src={p.avatarUrl} alt="" width={48} height={48} className="w-full h-full object-cover" /></div>
                 <div className="text-xs font-bold mb-1 truncate max-w-[80px]">{p.name}</div>
                 <div className="flex gap-1 mb-2">{p.cards.map((c, i) => <div key={i} className={`w-3 h-5 rounded-sm border ${c.revealed ? 'bg-red-200' : 'bg-[#1A1F26]'}`} />)}</div>
                 <div className="flex items-center gap-1 text-[10px] font-bold text-yellow-600 bg-yellow-50 px-2 rounded-full"><Coins className="w-3 h-3" /> {p.coins}</div>
@@ -279,7 +310,7 @@ export default function CoupGame({
       {gameState.winner && (
         <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white p-10 rounded-[32px] text-center animate-in zoom-in duration-300 border-4 border-[#9e1316] shadow-2xl max-w-sm w-full relative overflow-hidden">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
+            <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-20" />
             <div className="relative z-10">
                 <Crown className="w-24 h-24 text-yellow-500 mx-auto mb-6 animate-bounce drop-shadow-md" />
                 <h2 className="text-xs font-black uppercase tracking-[0.2em] text-gray-400 mb-2">{t.winner}</h2>

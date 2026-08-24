@@ -1,170 +1,164 @@
-# 🎮 Darhaal Games  
-**Online Multiplayer Gaming Platform**
+# Darhaal Games
 
-![Version](https://img.shields.io/badge/version-1.5.4-blue.svg) ![License](https://img.shields.io/badge/license-Non--Commercial-red.svg) ![Status](https://img.shields.io/badge/status-inactive-red.svg)
+![Version](https://img.shields.io/badge/version-2.1.0-blue.svg) ![License](https://img.shields.io/badge/license-View%20%26%20Study%20Only-red.svg) ![Tests](https://img.shields.io/badge/tests-93-brightgreen.svg)
 
-Darhaal Games is a production-ready SPA platform for real-time multiplayer browser games. The project combines classic game mechanics with a modern tech stack, featuring a robust lobby system, optimistic UI updates, and WebSocket-based state synchronization via Supabase.
+Five board and logic games you can play with friends in a browser. One person
+creates a room, shares the link, everyone else joins — no install, no account
+required.
 
-🔗 **Live Demo:**  
-👉 https://online-games-phi.vercel.app
+**Live:** https://games.okhten.com
 
----
-
-## ✨ Key Features
-
-### ⚡ Real-Time Multiplayer
-- Instant synchronization of game states, turns, timers, and lobby events  
-- Powered by **Supabase Realtime channels**
-
-### 🏛️ Universal Lobby System
-- Unified architecture for:
-  - Room creation  
-  - Matchmaking  
-  - Player management  
-- Shared logic across all game modes
-
-### 👤 Authentication & Profiles
-- Guest Mode  
-- Email / Password  
-- OAuth (Google)  
-- Persistent profiles, statistics, and avatar customization
-
-### 📱 Responsive UX
-- Fully adaptive interface  
-- Optimized for:
-  - Desktop (mouse & keyboard)  
-  - Mobile (touch)
+Built and run by one person. It is a real product with real users rather than a
+demo, but it is a small one, and the notes below try to describe it as it
+actually is.
 
 ---
 
-## 🕹️ Game Modes
+## What is interesting in here
 
-### 🚩 Flager — *Geography Quiz*
-A unique trivia experience built around visual deduction.
+A few parts are worth reading if you are looking at this as engineering work.
 
-**Core Mechanics**
-- Guess the country while the flag is gradually revealed through digital noise  
-- Pixel-by-pixel comparison unlocks correct fragments
+**One sync core for five games.** Every game does the same four things: fetch
+state, subscribe to changes, guard against stale updates, write back. That lives
+once in [`hooks/core/useLobbySync.ts`](src/hooks/core/useLobbySync.ts); the game
+hooks contain only game logic. Extracting it removed about 350 duplicated lines.
 
-**Technical Highlights**
-- Custom HTML5 Canvas image processing  
-- Round-based multiplayer synchronization
+**Writes that survive two people acting at once.** All five games share a single
+`game_state` row behind one version counter, so simultaneous actions collide —
+constantly in Minesweeper, where every player has their own board and clicks are
+independent. Writes go through a compare-and-swap RPC; on a conflict the update
+is rebuilt against fresh state and retried, so nobody loses their move. Verified
+against the live database: twelve simultaneous clicks, twelve applied, six
+conflicts silently resolved.
 
----
+**A public layer bolted onto an auth-walled app.** Every application route is a
+client component behind a login screen, so search engines saw nothing. The fix
+was a separate server-rendered tree (`/games`, `/en/games`) plus a landing on the
+root, with hreflang pairs, per-page Open Graph cards and structured data — all
+generated from one content module. See [`docs/seo.md`](docs/seo.md).
 
-### 💣 Minesweeper — *Co-op / Versus*
-A modern multiplayer interpretation of the classic puzzle.
-
-**Core Mechanics**
-- Infinite-feeling board with zoom and pan support  
-- Custom viewport engine using transform / scale logic
-
-**Features**
-- First-click safety guarantee  
-- Chording mechanics  
-- Multiplayer conflict resolution
-
----
-
-### ⚓ Battleship — *Strategy*
-Real-time tactical naval warfare.
-
-**Core Mechanics**
-- Drag-and-drop ship placement  
-- Rotation support during deployment
-
-**Features**
-- Optimistic UI for instant shot feedback  
-- Server-authoritative turn timers  
-- Fleet status tracking
+**Authorization that is actually tested.** [`scripts/authz-test.mjs`](scripts/authz-test.mjs)
+signs in two throwaway guests and has one attempt six attacks on the other's
+room. It runs against the live database, cleans up after itself, and fails the
+build if any attack succeeds.
 
 ---
 
-### 🎭 Coup — *Social Deduction*
-A digital adaptation of the bluff-heavy card game.
+## The games
 
-**Core Mechanics**
-- Complex state machine handling nested phases  
-  *(Action → Challenge → Block → Resolution)*
+| Game | Players | Notable bits |
+|------|---------|--------------|
+| **Spyfall** | 3–12 | Hidden roles, ten location packs, live vote tallying |
+| **Minesweeper** | 1–4 | Pan/zoom viewport, first-click safety, chording, identical grids for a fair race |
+| **Flager** | 1–4 | Canvas pixel-reveal mechanic, ~200 countries, score decays with time |
+| **Battleship** | 2 | Drag-and-drop placement with live rule validation, extra turn on a hit |
+| **Coup** | 2–6 | Nested state machine: action → challenge → block → resolution |
 
-**Features**
-- Full action log history  
-- Strict action validation  
-- AFK protection mechanisms
-
----
-
-### 🕵️ Spyfall — *Social*
-A conversation-driven game of deception and deduction.
-
-**Core Mechanics**
-- Hidden role distribution  
-- Location guessing under time pressure
-
-**Features**
-- Synchronized timers  
-- Voting system  
-- Dynamic location and card packs
+Rules, tactics and per-game notes: [`docs/games.md`](docs/games.md).
 
 ---
 
-## 🛠️ Tech Stack
+## Security posture, honestly
 
-| Category        | Technologies |
-|-----------------|--------------|
-| **Core**        | Next.js 14 (App Router), React 18, TypeScript |
-| **Styling**     | Tailwind CSS, Lucide React |
-| **Backend / DB**| Supabase (PostgreSQL, Auth, Realtime) |
-| **State Mgmt**  | Custom React Hooks, Optimistic Updates |
-| **Deployment**  | Vercel |
+Some of this is deliberately unfinished, so it is worth being direct about
+where the line is and why it sits there.
+
+**What was worth fixing, and is fixed.** These hurt players regardless of who
+they are playing with, and all were live in production at some point:
+
+- Room passwords and user emails were readable by anyone holding the public
+  anon key — which ships in the browser bundle.
+- `TRUNCATE` was granted to the public role on every table. It ignores
+  row-level security, so any visitor could have wiped the database outright.
+- Any signed-in user, guests included, could rewrite or delete **any** room.
+
+All closed, and re-tested from the outside rather than by reading the config.
+The full write-up, including one finding I got wrong and had to correct, is in
+[`docs/security.md`](docs/security.md).
+
+**What is deliberately not built: server-authoritative game rules.** The client
+computes `game_state` and writes it. The database checks the *version*, not the
+*move*. A crafted client can cheat — read the opponent's ship positions, deal
+itself better Coup cards.
+
+That is a real hole and it stays open on purpose. Closing it means
+re-implementing all five rulebooks inside the database, adding a round-trip to
+every single move, and roughly doubling the amount of code to maintain. The cost
+lands on the people playing honestly, in latency and complexity. The benefit,
+for a group of friends sharing a room link in a group chat, is close to nothing:
+cheating here is a social problem, and a friend who edits their board to win has
+already ended the game in the way that matters.
+
+The trade-off would flip immediately if the platform opened to strangers or
+added a leaderboard worth gaming. It is tracked as the first thing to change,
+not forgotten.
 
 ---
 
-## 🚀 Local Development
+## Tech stack
 
-### Prerequisites
-- Node.js **18+**  
-- Supabase account
+| Area | Choice |
+|------|--------|
+| Framework | Next.js 16 (App Router), React 19, TypeScript |
+| Styling | Tailwind CSS 4, Lucide icons |
+| Backend | Supabase — Postgres, Auth, Realtime, Storage |
+| State | Custom hooks, optimistic updates with CAS write-back |
+| Hosting | Vercel |
 
-### Installation
+No state-management library: the shared sync hook and React state cover it.
+Zero `any`, zero `@ts-ignore`, zero dependency vulnerabilities, 93 tests.
 
-Clone the repository:
-```bash
-git clone https://github.com/your-username/online-games.git
-cd online-games
-```
+---
 
-## Install dependencies:
+## Running it locally
+
+Included so the setup is legible when reading the code — note that the license
+does not grant the right to deploy or run this. Requires Node 22 and a Supabase
+project.
 
 ```bash
+git clone https://github.com/Darhaal/Darhaal-Games.git
+cd Darhaal-Games
 npm install
-# or
-yarn install
-```
-
-### Environment Setup
-Create a .env.local file in the project root:
-
-
-```bash
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-### Run the development server:
-```bash
+cp .env.example .env.local   # fill in your Supabase URL and anon key
 npm run dev
 ```
 
-## 📄 License
+The SQL that sets up the database lives in [`supabase/migrations/`](supabase/migrations/)
+and is applied in filename order. [`docs/getting-started.md`](docs/getting-started.md)
+walks through it.
 
-This project is licensed under a **Non-Commercial License**.
+---
 
-✅ Free for personal, educational, and non-profit use
-🚫 Commercial use (sales, paid services, ads) is **not allowed** without a separate agreement
+## Documentation
 
-📧 For commercial licensing, contact: medius.org@gmail.com
+| | |
+|---|---|
+| [Getting Started](docs/getting-started.md) | Install and run |
+| [Environment](docs/environment.md) | Every variable and what breaks without it |
+| [Architecture](docs/architecture.md) | Structure and real-time data flow |
+| [Business Logic](docs/business-logic.md) | Sync model, lobby lifecycle, per-game state machines |
+| [Data Model](docs/data-model.md) | Tables, `game_state` shapes, lobby lifecycle and cleanup |
+| [Games](docs/games.md) | Each mode and where its code lives |
+| [SEO](docs/seo.md) | The public crawlable layer |
+| [Security](docs/security.md) | Audit, fixes, and the accepted risks |
+| [Deployment](docs/deployment.md) | Vercel and Supabase setup |
 
-See the **LICENSE** file for full details.
+Status: [Backlog](TODO.md) · [Changelog](CHANGELOG.md)
 
-Developed with ❤️ by Darhaal Games
+---
+
+## License
+
+**Source-available, not open source.** The code is published so it can be read,
+studied and evaluated — not used. Running it, reusing any part of it, deriving
+from it or training models on it all need written permission.
+
+Forking on GitHub is permitted by GitHub's own Terms of Service; that permission
+comes from GitHub, not from this license, and grants none of the rights withheld
+above.
+
+Full terms in [LICENSE](LICENSE). For anything beyond reading:
+artem@okhten.com.
+
+A product of Okhten Group LLC.

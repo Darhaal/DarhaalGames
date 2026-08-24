@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 
 interface PresenceState {
@@ -13,7 +14,7 @@ export const usePresenceHeartbeat = (roomCode: string, userId?: string) => {
   });
 
   // Use a ref to track if we've already subscribed to avoid double-subscriptions in React.StrictMode
-  const channelRef = useRef<any>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     if (!roomCode || !userId) return;
@@ -41,11 +42,9 @@ export const usePresenceHeartbeat = (roomCode: string, userId?: string) => {
         const userIds = Object.keys(newState);
         setState({ onlineUserIds: userIds, isSynced: true });
       })
-      .on('presence', { event: 'join' }, ({ newPresences }) => {
-        // console.log('Join:', newPresences);
+      .on('presence', { event: 'join' }, () => {
       })
-      .on('presence', { event: 'leave' }, ({ leftPresences }) => {
-        // console.log('Leave:', leftPresences);
+      .on('presence', { event: 'leave' }, () => {
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {

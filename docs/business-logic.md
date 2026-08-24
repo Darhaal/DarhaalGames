@@ -1,0 +1,188 @@
+# 🧠 Business Logic — Deep Dive
+
+This document describes how the game logic actually works, based on a full source
+audit (v1.5.4). It covers the synchronization model, the lobby lifecycle, and the
+state machine of every game.
+
+## Core synchronization model
+
+The platform is **client-authoritative**: there is no game server. All game state
+lives in one JSONB column (`lobbies.game_state`) in Supabase Postgres, and every
+mutation is performed by a client:
+
+```
+Player action → clone state (JSON.parse/stringify) → mutate → version++ →
+setGameState (optimistic local) → UPDATE lobbies SET game_state → 
+Supabase Realtime (postgres_changes) → all other clients receive new state
+```
+
+Key elements, identical in all five game hooks:
+
+| Element | Purpose |
+|---------|---------|
+| `version` (number) | Monotonic counter. Incoming realtime states with `version < local` are dropped (protects against out-of-order delivery). |
+| `lastActionTime` | Timestamp of the last mutation; some UIs derive timers from it. |
+| `turnDeadline` | Absolute epoch-ms deadline for the current turn (Coup, Battleship) so timers agree across clients. |
+| `stateRef` (React ref) | Every hook mirrors its state into a ref so async callbacks always read the freshest state. |
+| Latency hiding | Flager and Minesweeper merge the local player's own sub-state over incoming server state when the local copy is "ahead" (more guesses / more opened cells). |
+
+**Write path (v2.0):** all state writes go through
+[`src/lib/gameStateSync.ts`](../src/lib/gameStateSync.ts) → the `update_game_state`
+RPC, which performs a **compare-and-swap** (`WHERE version = expected`). On a
+version conflict the losing client re-fetches and re-syncs instead of silently
+overwriting the other write. If the SQL migration hasn't been applied yet, the
+helper transparently falls back to the legacy last-write-wins `UPDATE`.
+
+## Lobby lifecycle
+
+1. **Create** (`/create`): the host picks a game and settings; the client inserts a
+   row into `lobbies` with a random 6-char `code`, `is_private` + `password`
+   (optional), and a pre-seeded `game_state` (host is player #1).
+2. **Discover** (`/play`): all non-finished lobbies are listed with realtime
+   refresh; join by code is also supported. Private lobbies require the password.
+3. **Join**: for Coup the joiner is added to `game_state.players` directly from
+   `/play`; all other games auto-join via `initGame()` inside the game page
+   (effect: "if I'm not in players and status === waiting → add me").
+4. **Waiting room** (`UniversalLobby`): shows presence (Supabase Presence channel
+   `presence:<code>`), host can kick, offline players are auto-kicked by the host
+   after a 10-second grace period. Start button unlocks at `minPlayers`.
+5. **Playing**: game-specific (below).
+6. **Finish/Leave**: when the last player leaves, the client deletes the lobby row.
+   Host leaving transfers `isHost` to the first remaining player.
+
+### Presence & auto-kick
+
+`usePresenceHeartbeat(roomCode, userId)` tracks a Supabase Presence channel keyed
+by user id. In `UniversalLobby`, **only the host** runs a 1-second interval: any
+player missing from presence gets a 10s countdown; if still offline they are
+removed from `game_state.players` (fetch-fresh → filter → update).
+
+## Per-game state machines
+
+### 🎭 Coup (`useCoupGame`)
+The most complex machine. `players` is an **array**; `turnIndex` points at the
+current player.
+
+Phases:
+```
+choosing_action
+   ├─ income ──────────────────────────────► nextTurn
+   ├─ coup (-7) ─────────────► losing_influence(target) ─► nextTurn
+   ├─ foreign_aid ──────────► waiting_for_blocks
+   └─ tax / steal / exchange / assassinate ─► waiting_for_challenges
+waiting_for_challenges ─(all pass)─► apply effect      (tax/exchange)
+                        └─(steal/assassinate)─► waiting_for_blocks
+waiting_for_blocks ─(block)─► waiting_for_block_challenges
+                   └─(all pass)─► apply effect
+waiting_for_block_challenges ─(pass)─► action cancelled ─► nextTurn
+                             └─(challenge)─► losing_influence(...)
+losing_influence ─(card picked)─► resolves action.nextPhase
+resolving_exchange ─(cards picked)─► nextTurn
+```
+
+- **Challenge resolution**: if the accused proves the role, the shown card is
+  shuffled into the deck and replaced, and the challenger loses influence; the
+  original action continues (`nextPhase: 'continue_action'`). If the accused
+  bluffed, they lose influence and the action is cancelled/continues per context.
+- **Deck**: 15 cards (3 of each of 5 roles), 2 dealt per player.
+- **AFK protection**: 60s turn / 30s reaction deadlines; on expiry `skipTurn()`
+  removes the offending player (choose/lose/exchange phases) or force-resolves the
+  reaction phase. Any client whose local timer hits 0 may fire it.
+- **Win**: last player with an unrevealed card; also triggered when others leave.
+- **Stats**: on `finished`, each client records win/loss for itself
+  (`durationSeconds` is a hardcoded 900).
+
+### ⚓ Battleship (`useBattleshipGame`)
+`players` is a **Record<userId, PlayerBoard>** (exactly 2). Phases:
+`setup → playing → finished`; lobby `status` mirrors `waiting → playing → finished`.
+
+- **Placement**: ships are kept **locally** (`myShips`) during setup and only
+  written to the DB on "Ready" (`submitShips`). Placement validation: 10×10 board,
+  no touching (1-cell danger zone), fleet = 1×4, 2×3, 3×2, 4×1. Auto-placement
+  retries up to 200 board attempts.
+- **Both ready → playing**: first player in the object gets the first turn, 60s
+  `turnDeadline`.
+- **Shots**: hit → shoot again; miss → turn passes. A killed ship auto-marks its
+  1-cell perimeter as misses. Win when `aliveShipsCount === 0`.
+- **Timeout**: the *current* player's own client passes the turn on expiry.
+- **Leaving mid-match** = surrender: remaining player wins.
+
+### 🚩 Flager (`useFlagerGame`)
+`players` is an **array**. Statuses: `waiting → playing ⇄ round_end → finished`.
+
+- **Start**: host generates `targetChain` — N random country codes (out of ~246);
+  every round has a 3-second countdown (`roundStartTime = now + 3000`).
+- **Guessing**: up to 10 attempts per round. The flag is revealed via canvas
+  pixel-matching: every guessed flag's pixels within RGB distance <45 of the
+  target's pixels become permanently visible ("Pixel Match").
+- **Scoring**: `points = max(10, 1000 − (attempts−1)×50 − seconds×10)`.
+- **Round end**: when every player `hasFinishedRound` (guessed, out of attempts,
+  or personal timeout), results are appended to `history`, status → `round_end`;
+  next round starts when **all** players press "Next".
+- **Finish**: after the last round; the podium ranks by total score.
+- **Stats**: recorded flat (no single/multi mode split and no `extraCount` in this
+  version — see TODO).
+
+### 💣 Minesweeper (`useMinesweeperGame`)
+`players` is a **Record<userId, MinesweeperPlayer>`; each player has their **own
+board** with the same settings (versus race). Statuses: `waiting → playing → finished`.
+
+- **Board generation**: empty boards on start; mines are placed on the player's
+  *first click* with a 3×3 safe zone (first-click safety).
+- **Opening**: iterative flood-fill (stack-based, no recursion). Chording (middle
+  click on a number with matching flags) opens remaining neighbors.
+- **Win**: open all safe cells **or** flag exactly all mines. First winner ends
+  the match for everyone (`status = finished`, `winner = name`).
+- **Loss**: mine hit or personal timeout → player status `lost`; match ends when
+  no one is left playing.
+- **Leaving** mid-game marks the player `left` (board stays visible, grayed).
+- **Stats**: win/loss with `mode` (single vs multi by player count) and
+  `extraCount` = correctly flagged mines.
+
+### 🕵️ Spyfall (`useSpyfallGame`)
+`players` is an **array**. Statuses: `waiting → playing ⇄ voting → finished`.
+
+- **Start**: one random location from the selected pack; one random spy
+  (`spyCount` is fixed at 1); civilians get roles from the location's role list
+  (roles repeat if players > roles). Roles are stored as JSON-stringified
+  `{ru, en}` names.
+- **Nomination**: any player may accuse once per round (`hasNominated`); the game
+  switches to `voting`, author auto-votes "yes".
+- **Voting**: everyone except the target votes; conviction requires **unanimous**
+  yes. Spy convicted → locals win (`spy_caught`); innocent convicted → spy wins
+  (`innocent_killed`). Any "no" returns to playing.
+- **Spy guess**: the spy may at any time name the location — correct → spy wins
+  (`guessed_loc`), wrong → locals win (`spy_failed_guess`).
+- **Timer**: round duration (3–15 min); on expiry the spy wins (`time`). Note:
+  the timer keeps running during voting.
+- **Leaving**: spy leaving → locals win (`spy_left`); a civilian leaving below 3
+  players → technical spy win.
+- **Scoring across rounds** (persists via "New Round"): spy win +5 to spy;
+  locals win +1 to each civilian, +1 bonus to a successful nomination author.
+- **Stats**: ⚠️ not recorded at all in this version (see TODO).
+
+## Statistics (`lib/playerStats.ts`)
+
+`updatePlayerStats(userId, {gameType, result, durationSeconds, mode?, extraCount?})`:
+
+- Reads `player_stats` by `user_id` (a row must already exist — created by a
+  DB-side signup trigger; guests without a row are skipped).
+- For **minesweeper/flager with `mode`**: keeps `details[game].single|multi`
+  buckets `{wins, lost, time, extra}` and migrates the legacy flat format on the fly.
+- Otherwise: flat `details[game] = {wins, lost, time}`.
+- `time` is stored in minutes (min 1 per game); `total_games` increments.
+- The achievements page aggregates single+multi and tolerates both formats.
+
+## Authentication flows (`AuthForm`, `Settings`, `reset-password`)
+
+- **Sign up**: username uniqueness check against `profiles`, then
+  `auth.signUp` with `{username, avatar_url}` metadata (random DiceBear avatar);
+  email confirmation redirect → current origin.
+- **Sign in**: the single input accepts username *or* email; usernames are
+  resolved to email via `profiles`.
+- **Guest**: `signInAnonymously` + random avatar; progress not persisted.
+- **Google OAuth**: standard redirect flow.
+- **Password reset**: only from Settings (logged-in) via `resetPasswordForEmail`
+  → `/reset-password`. There is no "forgot password" link on the login form (TODO).
+- Route guards: every protected page redirects unauthenticated users to
+  `/?returnUrl=<path>`; `AuthForm` honors `returnUrl` after login.

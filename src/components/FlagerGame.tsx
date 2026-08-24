@@ -1,17 +1,19 @@
 'use client';
 
+import Image from 'next/image';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
-  LogOut, Check, X, Flag, Trophy, Search, Loader2,
-  ArrowRight, Clock, Target, Zap, Crown, Home, AlertCircle,
-  Book, HelpCircle, UserMinus, Keyboard, Lightbulb
+  Check, X, Flag, Trophy, Search, Loader2,
+  ArrowRight, Clock, Target, Zap, Crown, Home,
+  UserMinus
 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { FlagerState, FlagerNotification } from '@/types/flager';
+import { FlagerState, FlagerNotification, FlagerPlayerState } from '@/types/flager';
 import { COUNTRIES, COUNTRY_CODES } from '@/data/flager/countries';
 import GameHeader from './GameHeader';
 import GameRulesModal from './GameRulesModal';
 import { GAME_RULES } from '@/constants/rules';
+import { defaultAvatar } from '@/constants/app';
+import { playSfx } from '@/lib/sound';
 
 const UI_TEXT = {
   ru: {
@@ -101,20 +103,16 @@ interface FlagerGameProps {
 }
 
 const NotificationToast = ({ notifications, lang }: { notifications: FlagerNotification[], lang: 'ru' | 'en' }) => {
-    const [visibleNote, setVisibleNote] = useState<FlagerNotification | null>(null);
-    const lastNoteRef = useRef<number>(0);
+    // The visible note is derived: the latest one that is not dismissed yet
+    const [hiddenUpToId, setHiddenUpToId] = useState(0);
+    const latest = notifications && notifications.length > 0 ? notifications[notifications.length - 1] : null;
+    const visibleNote = latest && latest.id > hiddenUpToId ? latest : null;
 
     useEffect(() => {
-        if (notifications && notifications.length > 0) {
-            const latest = notifications[notifications.length - 1];
-            if (latest.id > lastNoteRef.current) {
-                setVisibleNote(latest);
-                lastNoteRef.current = latest.id;
-                const timer = setTimeout(() => setVisibleNote(null), 4000);
-                return () => clearTimeout(timer);
-            }
-        }
-    }, [notifications]);
+        if (!visibleNote) return;
+        const timer = setTimeout(() => setHiddenUpToId(visibleNote.id), 4000);
+        return () => clearTimeout(timer);
+    }, [visibleNote]);
 
     if (!visibleNote) return null;
 
@@ -132,7 +130,7 @@ const NotificationToast = ({ notifications, lang }: { notifications: FlagerNotif
     );
 };
 
-const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode: string, guesses: string[], isRoundDone: boolean, t: any }) => {
+const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode: string, guesses: string[], isRoundDone: boolean, t: { noData: string; pixelMatch: string } }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isLoading, setIsLoading] = useState(true);
   const WIDTH = 640;
@@ -148,7 +146,7 @@ const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode:
     const targetPath = COUNTRIES[targetCode.toLowerCase()]?.flagPath;
     if (!targetPath) return;
 
-    const targetImg = new Image();
+    const targetImg = new window.Image();
     targetImg.crossOrigin = "Anonymous";
     targetImg.src = targetPath;
 
@@ -189,7 +187,7 @@ const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode:
             const guessPath = COUNTRIES[guessCode.toLowerCase()]?.flagPath;
             if (!guessPath) { processedCount++; return; }
 
-            const guessImg = new Image();
+            const guessImg = new window.Image();
             guessImg.crossOrigin = "Anonymous";
             guessImg.src = guessPath;
 
@@ -261,11 +259,7 @@ const FlagRevealCanvas = ({ targetCode, guesses, isRoundDone, t }: { targetCode:
   );
 };
 
-const Podium = ({ players, currentUserId }: { players: any[], currentUserId: string }) => {
-    const sorted = [...players].sort((a, b) => b.score - a.score);
-    const [first, second, third] = sorted;
-
-    const PodiumItem = ({ p, place, delay }: { p: any, place: number, delay: string }) => {
+const PodiumItem = ({ p, place, delay, currentUserId }: { p: FlagerPlayerState | undefined, place: number, delay: string, currentUserId: string }) => {
         if (!p) return null;
         const isMe = p.id === currentUserId;
         const height = place === 1 ? 'h-32 md:h-48' : place === 2 ? 'h-24 md:h-36' : 'h-16 md:h-24';
@@ -276,7 +270,7 @@ const Podium = ({ players, currentUserId }: { players: any[], currentUserId: str
                 <div className="relative mb-2">
                     {place === 1 && <Crown className="w-6 h-6 md:w-8 md:h-8 text-[#FBBF24] absolute -top-8 left-1/2 -translate-x-1/2 animate-bounce" />}
                     <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full border-4 ${isMe ? 'border-[#9e1316]' : 'border-white'} shadow-lg overflow-hidden bg-gray-200`}>
-                         <img src={p.avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.id}`} className="w-full h-full object-cover" />
+                         <Image src={p.avatarUrl || defaultAvatar(p.id)} alt="" width={64} height={64} className="w-full h-full object-cover" />
                     </div>
                     <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-[#1A1F26] text-white text-[9px] md:text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap border border-white/20 max-w-[80px] truncate">
                         {p.name}
@@ -291,20 +285,24 @@ const Podium = ({ players, currentUserId }: { players: any[], currentUserId: str
         );
     };
 
+const Podium = ({ players, currentUserId }: { players: FlagerPlayerState[], currentUserId: string }) => {
+    const sorted = [...players].sort((a, b) => b.score - a.score);
+    const [first, second, third] = sorted;
+
     return (
         <div className="flex items-end justify-center gap-2 md:gap-4 py-8">
-            <PodiumItem p={second} place={2} delay="delay-200" />
-            <PodiumItem p={first} place={1} delay="delay-0" />
-            <PodiumItem p={third} place={3} delay="delay-400" />
+            <PodiumItem p={second} place={2} delay="delay-200" currentUserId={currentUserId} />
+            <PodiumItem p={first} place={1} delay="delay-0" currentUserId={currentUserId} />
+            <PodiumItem p={third} place={3} delay="delay-400" currentUserId={currentUserId} />
         </div>
     );
 };
 
 export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout, readyNextRound, leaveGame, lang = 'ru' }: FlagerGameProps) {
-  const router = useRouter();
   const [input, setInput] = useState('');
   const [shake, setShake] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState(0);
   const [showRules, setShowRules] = useState(false);
 
   const t = UI_TEXT[lang];
@@ -323,6 +321,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
   const roundDuration = gameState.settings?.roundDuration || 60;
 
   useEffect(() => {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the per-round counter when the round changes; the alternative is remounting the whole board via key
       setElapsed(0);
   }, [gameState.currentRoundIndex]);
 
@@ -348,7 +347,6 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
   }, [isPlaying, isRoundEnd, isFinished, isRoundDone, gameState.roundStartTime, handleTimeout, roundDuration]);
 
   const timeLeft = Math.max(0, roundDuration - Math.max(0, elapsed));
-  const isLowTime = timeLeft <= 10;
   const isCountingDown = elapsed < 0;
   const countdownValue = Math.abs(elapsed);
 
@@ -372,6 +370,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
 
   const handleGuess = (code: string) => {
       const isCorrect = code.toLowerCase() === currentFlagCode.toLowerCase();
+      playSfx(isCorrect ? 'success' : 'error');
       if (!isCorrect) {
           setShake(true);
           setTimeout(() => setShake(false), 500);
@@ -381,10 +380,11 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
       setShowDropdown(false);
   };
 
-  const calculateAccuracy = (p: any) => {
+  const calculateAccuracy = (p: FlagerPlayerState | undefined) => {
+      if (!p) return 0; // Guard: a spectator/left player has no entry in players
       let totalGuesses = 0;
       let correctGuesses = 0;
-      p.history.forEach((h: any) => {
+      (p.history || []).forEach((h) => {
           totalGuesses += h.attempts;
           if (h.isCorrect) correctGuesses++;
       });
@@ -400,9 +400,14 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
   };
 
   const handleEmergencyExit = () => {
+    // leaveGame (handleLeave) awaits the DB write and navigates by itself
     leaveGame();
-    setTimeout(() => router.push('/'), 500);
   };
+
+  // Final sound — once when the game ends
+  useEffect(() => {
+      if (isFinished) playSfx('win');
+  }, [isFinished]);
 
   const isAttemptsFailed = (me?.guesses?.length || 0) >= 10 && me?.guesses?.[(me?.guesses?.length || 0) - 1] !== currentFlagCode.toLowerCase();
   const isTimeFailed = elapsed >= roundDuration && !me?.roundScore;
@@ -411,13 +416,13 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
   if (isFinished) {
       return (
         <div className="fixed inset-0 z-[200] bg-[#F8FAFC] flex flex-col font-sans">
-            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
+            <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
 
             <div className="flex-1 overflow-y-auto pb-24">
                 <div className="w-full max-w-4xl mx-auto p-4 md:p-8">
                     <div className="bg-white rounded-[40px] shadow-2xl border border-[#E6E1DC] overflow-hidden animate-in zoom-in-95 duration-500">
                         <div className="bg-[#1A1F26] p-8 text-center relative overflow-hidden">
-                            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-overlay" />
+                            <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-10 mix-blend-overlay" />
                             <Trophy className="w-16 h-16 text-[#9e1316] mx-auto mb-4 animate-bounce" />
                             <h2 className="text-3xl md:text-4xl font-black uppercase text-white tracking-tight">{t.gameOver}</h2>
                             <p className="text-white/60 font-bold uppercase tracking-widest text-sm mt-2">{t.sessionResults}</p>
@@ -440,7 +445,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                                                 <td className="py-4 pl-2">
                                                     <div className="flex items-center gap-3">
                                                         <span className="font-bold text-[#8A9099] w-4">{idx+1}</span>
-                                                        <img src={p.avatarUrl} className="w-8 h-8 rounded-full bg-white border border-gray-200" />
+                                                        <Image src={p.avatarUrl} alt="" width={32} height={32} className="w-8 h-8 rounded-full bg-white border border-gray-200" />
                                                         <span className={`font-bold text-sm truncate max-w-[100px] sm:max-w-xs ${p.id === userId ? 'text-[#9e1316]' : 'text-[#1A1F26]'}`}>
                                                             {p.name} {p.id === userId && t.you}
                                                         </span>
@@ -453,7 +458,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                                                     </div>
                                                 </td>
                                                 <td className="py-4 text-center font-bold text-[#1A1F26]">
-                                                    {p.history.filter((h:any) => h.isCorrect).length} <span className="text-[#8A9099] text-xs">/ {gameState.targetChain.length}</span>
+                                                    {p.history.filter((h) => h.isCorrect).length} <span className="text-[#8A9099] text-xs">/ {gameState.targetChain.length}</span>
                                                 </td>
                                                 <td className="py-4 text-right pr-2 font-black text-lg text-[#1A1F26]">
                                                     {p.score}
@@ -479,7 +484,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#1A1F26] flex flex-col font-sans relative overflow-hidden selection:bg-[#9e1316] selection:text-white">
-       <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
+       <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
 
        <GameRulesModal
           isOpen={showRules}
@@ -493,7 +498,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
        {isCountingDown && (
            <div className="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none">
                <div key={countdownValue} className="relative w-32 h-32 md:w-40 md:h-40 bg-white/90 backdrop-blur-xl rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.1)] border border-[#E6E1DC] flex items-center justify-center animate-in zoom-in-50 fade-in duration-200">
-                   <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 mix-blend-overlay rounded-full" />
+                   <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-20 mix-blend-overlay rounded-full" />
                    <div className="absolute inset-0 rounded-full border-4 border-[#9e1316]/10" />
                    <div className="absolute -inset-1 rounded-full border border-[#9e1316]/20 opacity-0 animate-ping" />
                    <span className="text-5xl md:text-7xl font-black text-[#1A1F26] relative z-10 tabular-nums select-none">
@@ -562,7 +567,23 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                         <input
                             type="text"
                             value={input}
-                            onChange={(e) => { setInput(e.target.value); setShowDropdown(true); }}
+                            onChange={(e) => { setInput(e.target.value); setShowDropdown(true); setHighlightIdx(0); }}
+                            onKeyDown={(e) => {
+                                if (filteredCountries.length === 0) return;
+                                // Arrows navigate suggestions, Enter/Tab picks the highlighted one
+                                if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    setHighlightIdx(i => (i + 1) % filteredCountries.length);
+                                } else if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    setHighlightIdx(i => (i - 1 + filteredCountries.length) % filteredCountries.length);
+                                } else if (e.key === 'Enter' || e.key === 'Tab') {
+                                    e.preventDefault();
+                                    handleGuess(filteredCountries[Math.min(highlightIdx, filteredCountries.length - 1)]);
+                                } else if (e.key === 'Escape') {
+                                    setShowDropdown(false);
+                                }
+                            }}
                             placeholder={isCountingDown ? '...' : t.inputPlaceholder}
                             className={`
                                 w-full bg-white border-2 rounded-2xl py-5 pl-12 pr-6 font-black text-lg md:text-xl text-[#1A1F26]
@@ -580,13 +601,14 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
 
                    {showDropdown && input.length > 0 && (
                       <div className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-[#E6E1DC] rounded-2xl shadow-2xl z-[100] overflow-hidden max-h-60 md:max-h-80 overflow-y-auto animate-in slide-in-from-bottom-2">
-                          {filteredCountries.map(code => (
+                          {filteredCountries.map((code, idx) => (
                               <button
                                   key={code}
                                   onClick={() => handleGuess(code)}
-                                  className="w-full text-left px-6 py-4 hover:bg-[#F5F5F0] font-bold text-base flex items-center gap-4 border-b border-gray-50 last:border-0 group transition-colors"
+                                  onMouseEnter={() => setHighlightIdx(idx)}
+                                  className={`w-full text-left px-6 py-4 font-bold text-base flex items-center gap-4 border-b border-gray-50 last:border-0 group transition-colors ${idx === highlightIdx ? 'bg-[#F5F5F0]' : 'hover:bg-[#F5F5F0]'}`}
                               >
-                                  <img src={COUNTRIES[code.toLowerCase()]?.flagPath} className="w-8 h-6 md:w-10 md:h-7 object-cover rounded shadow-sm group-hover:scale-110 transition-transform" />
+                                  <Image src={COUNTRIES[code.toLowerCase()]?.flagPath || ""} alt="" width={40} height={28} className="w-8 h-6 md:w-10 md:h-7 object-cover rounded shadow-sm group-hover:scale-110 transition-transform" />
                                   <span className="text-[#1A1F26] truncate">{COUNTRIES[code.toLowerCase()]?.name[lang]}</span>
                                   <ArrowRight className="w-4 h-4 ml-auto text-gray-300 group-hover:text-[#9e1316] -translate-x-2 group-hover:translate-x-0 transition-all hidden sm:block" />
                               </button>
@@ -605,7 +627,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                       const cData = COUNTRIES[code];
                       return (
                           <div key={i} className={`flex items-center gap-3 p-3 rounded-xl border min-w-[220px] md:min-w-0 animate-in fade-in slide-in-from-bottom-4 duration-300 ${isTarget ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-[#E6E1DC]'}`}>
-                              <img src={cData?.flagPath} className="w-10 h-7 object-cover rounded shadow-sm grayscale-[0.2]" />
+                              <Image src={cData?.flagPath || ""} alt="" width={40} height={28} className="w-10 h-7 object-cover rounded shadow-sm grayscale-[0.2]" />
                               <div className="flex flex-col min-w-0">
                                   <span className={`font-bold text-sm truncate ${isTarget ? 'text-emerald-800' : 'text-[#1A1F26]'}`}>{cData?.name[lang]}</span>
                                   <span className="text-[10px] text-gray-400 font-bold uppercase">{cData?.continent}</span>
@@ -648,7 +670,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                                   <div className="flex items-center gap-3">
                                       <div className="relative">
                                           <div className={`w-10 h-10 rounded-full border-2 overflow-hidden transition-all ${isDone ? (hasFailed ? 'border-red-500' : 'border-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.1)]') : (isMe ? 'border-[#1A1F26]' : 'border-transparent bg-gray-100')}`}>
-                                              <img src={p.avatarUrl} className="w-full h-full object-cover" />
+                                              <Image src={p.avatarUrl} alt="" width={40} height={40} className="w-full h-full object-cover" />
                                           </div>
                                           {isDone && (
                                               <div className={`absolute -bottom-1 -right-1 border-2 border-white rounded-full p-0.5 animate-in zoom-in ${hasFailed ? 'bg-red-500' : 'bg-emerald-500'}`}>
@@ -702,7 +724,7 @@ export default function FlagerGame({ gameState, userId, makeGuess, handleTimeout
                         </div>
 
                         <div className="relative h-40 md:h-48 rounded-2xl overflow-hidden shadow-md mb-6 group">
-                            <img src={COUNTRIES[currentFlagCode.toLowerCase()]?.flagPath} className="w-full h-full object-cover" />
+                            <Image src={COUNTRIES[currentFlagCode.toLowerCase()]?.flagPath || ""} alt="" fill sizes="(max-width: 768px) 100vw, 512px" className="object-cover" />
                             <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
                             <div className="absolute bottom-4 left-6">
                                 <div className="text-white/60 text-[10px] font-bold uppercase tracking-widest mb-1">{t.correctAnswer}</div>

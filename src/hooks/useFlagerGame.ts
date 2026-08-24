@@ -1,128 +1,66 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { FlagerState, FlagerPlayerState } from '@/types/flager';
 import { COUNTRY_CODES } from '@/data/flager/countries';
 import { updatePlayerStats } from '@/lib/playerStats';
+import { useLobbySync } from '@/hooks/core/useLobbySync';
+import { calcFlagerPoints } from '@/lib/gameLogic/flager';
+
+// DEFENSIVE: players must be an array (broken shapes have been seen in the DB)
+const normalizeFlager = (state: FlagerState): FlagerState => {
+  if (!state.players || !Array.isArray(state.players)) {
+    return { ...state, players: [] };
+  }
+  return state;
+};
 
 const generateFlags = (count: number): string[] => {
   const shuffled = [...COUNTRY_CODES].sort(() => 0.5 - Math.random());
   return shuffled.slice(0, count);
 };
 
-// Задержка перед стартом раунда (в мс)
+// Delay before the round starts (ms)
 const START_DELAY = 3000;
 
 export function useFlagerGame(lobbyId: string | null, userId: string | undefined) {
-  const [gameState, setGameState] = useState<FlagerState | null>(null);
-  const [roomMeta, setRoomMeta] = useState<{ name: string; code: string; isHost: boolean } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [lobbyDeleted, setLobbyDeleted] = useState(false);
+  const {
+    gameState, setGameState, gameStateRef,
+    roomMeta, loading, lobbyDeleted,
+    updateState, deleteLobby
+  } = useLobbySync<FlagerState>({
+    lobbyId,
+    userId,
+    channelPrefix: 'lobby-flager',
+    normalize: normalizeFlager,
+    // Preserve local progress when the server lags behind (latency hiding)
+    mergeIncoming: (prev, incoming) => {
+      const prevVersion = prev?.version || 0;
+      const newVersion = incoming.version || 0;
+      if (prev && newVersion < prevVersion) return prev;
 
-  const stateRef = useRef<{ lobbyId: string | null; userId: string | undefined; gameState: FlagerState | null }>({
-    lobbyId, userId, gameState: null
-  });
+      if (prev && userId && incoming.status === 'playing') {
+        if (prev.currentRoundIndex !== incoming.currentRoundIndex) return incoming;
 
-  useEffect(() => {
-    stateRef.current = { lobbyId, userId, gameState };
-  }, [lobbyId, userId, gameState]);
+        const myPrev = prev.players.find(pl => pl.id === userId);
+        const myIncoming = incoming.players.find(pl => pl.id === userId);
 
-  // --- SYNC ---
-  const fetchLobbyState = useCallback(async () => {
-    if (!lobbyId) return;
-    try {
-      const { data } = await supabase.from('lobbies').select('name, code, host_id, game_state').eq('id', lobbyId).single();
-      if (data) {
-        setRoomMeta({ name: data.name, code: data.code, isHost: data.host_id === userId });
-        if (data.game_state) {
-            const safeState = data.game_state;
-            // DEFENSIVE CODING: Ensure players is always an array
-            if (!safeState.players || !Array.isArray(safeState.players)) {
-                safeState.players = [];
-            }
-            setGameState(safeState);
-        }
-      } else {
-        setGameState(null);
-        setLobbyDeleted(true);
-      }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [lobbyId, userId]);
-
-  useEffect(() => {
-    if (!lobbyId) return;
-    fetchLobbyState();
-
-    const ch = supabase.channel(`lobby-flager:${lobbyId}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      (payload) => {
-          if (payload.new.game_state) {
-            setGameState(prev => {
-                const incoming = payload.new.game_state as FlagerState;
-
-                // DEFENSIVE: Fix incoming data structure if corrupted
-                if (!incoming.players || !Array.isArray(incoming.players)) {
-                    incoming.players = [];
-                }
-
-                const prevVersion = prev?.version || 0;
-                const newVersion = incoming.version || 0;
-
-                // Optimistic update conflict resolution
-                if (prev && newVersion < prevVersion) return prev;
-
-                // Preserve local optimistic updates if version matches but we have more local info
-                if (prev && userId && incoming.status === 'playing') {
-                    if (prev.currentRoundIndex !== incoming.currentRoundIndex) {
-                        return incoming;
-                    }
-
-                    const myPrev = prev.players.find(p => p.id === userId);
-                    const myIncoming = incoming.players.find(p => p.id === userId);
-
-                    if (myPrev && myIncoming) {
-                        // Keep local guesses if they are ahead of server (latency hiding)
-                        if ((myPrev.guesses?.length || 0) > (myIncoming.guesses?.length || 0) || (myPrev.score || 0) > (myIncoming.score || 0)) {
-                            const mergedPlayers = incoming.players.map(p =>
-                                p.id === userId ? myPrev : p
-                            );
-                            return { ...incoming, players: mergedPlayers };
-                        }
-                    }
-                }
-                return incoming;
-            });
+        if (myPrev && myIncoming) {
+          if ((myPrev.guesses?.length || 0) > (myIncoming.guesses?.length || 0) || (myPrev.score || 0) > (myIncoming.score || 0)) {
+            return { ...incoming, players: incoming.players.map(pl => pl.id === userId ? myPrev : pl) };
           }
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'lobbies', filter: `id=eq.${lobbyId}` },
-      () => {
-          setGameState(null);
-          setLobbyDeleted(true);
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(ch); };
-  }, [lobbyId, fetchLobbyState, userId]);
-
-  const updateState = async (newState: FlagerState) => {
-    newState.version = (newState.version || 0) + 1;
-    newState.lastActionTime = Date.now();
-    setGameState(newState);
-
-    if (stateRef.current.lobbyId) {
-       await supabase.from('lobbies').update({
-           game_state: newState,
-           status: newState.status
-       }).eq('id', stateRef.current.lobbyId);
+        }
+      }
+      return incoming;
     }
-  };
+  });
 
   // --- ACTIONS ---
 
   const initGame = async (userProfile: { name: string; avatarUrl: string }) => {
-    if (!userId || !stateRef.current.lobbyId) return;
+    if (!userId || !lobbyId) return;
 
     // Fetch fresh state to avoid overwriting
-    const { data } = await supabase.from('lobbies').select('game_state').eq('id', stateRef.current.lobbyId).single();
+    const { data } = await supabase.from('lobbies').select('game_state').eq('id', lobbyId).single();
     const currentState = data?.game_state as FlagerState;
     if (!currentState) return;
 
@@ -156,7 +94,7 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
   };
 
   const startGame = async () => {
-    const { data } = await supabase.from('lobbies').select('game_state').eq('id', stateRef.current.lobbyId).single();
+    const { data } = await supabase.from('lobbies').select('game_state').eq('id', lobbyId).single();
     const currentGs = data?.game_state as FlagerState;
     if (!currentGs) return;
 
@@ -206,87 +144,85 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
       }
   };
 
+  // Both players answer at the same moment constantly, and each only touches
+  // their own entry — written as a function of current state so a collision is
+  // rebuilt on fresh state instead of costing someone their answer.
   const makeGuess = async (guessCode: string) => {
-    const currentGs = stateRef.current.gameState;
-    if (!currentGs || !userId || currentGs.status !== 'playing') return;
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      if (Date.now() < current.roundStartTime) return null;
+      if (!current.players || !Array.isArray(current.players)) return null;
 
-    const now = Date.now();
-    if (now < currentGs.roundStartTime) return;
+      const player = current.players.find(p => p.id === userId);
+      if (!player || player.hasFinishedRound) return null;
 
-    // Safety checks
-    if (!currentGs.players || !Array.isArray(currentGs.players)) return;
+      const targetFlag = current.targetChain[current.currentRoundIndex].toLowerCase();
+      const guess = guessCode.toLowerCase();
 
-    const player = currentGs.players.find(p => p.id === userId);
-    if (!player || player.hasFinishedRound) return;
+      const newState: FlagerState = JSON.parse(JSON.stringify(current));
+      if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
 
-    const targetFlag = currentGs.targetChain[currentGs.currentRoundIndex].toLowerCase();
-    const guess = guessCode.toLowerCase();
+      const pIndex = newState.players.findIndex(p => p.id === userId);
+      if (pIndex === -1) return null;
+      const pState = newState.players[pIndex];
 
-    const newState: FlagerState = JSON.parse(JSON.stringify(currentGs));
-    if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
+      if (!pState.guesses) pState.guesses = [];
+      if (!pState.guesses.includes(guess)) {
+          pState.guesses.push(guess);
+      }
 
-    const pIndex = newState.players.findIndex(p => p.id === userId);
-    if (pIndex === -1) return;
-    const pState = newState.players[pIndex];
+      const isCorrect = guess === targetFlag;
+      const attemptsUsed = pState.guesses.length;
 
-    if (!pState.guesses) pState.guesses = [];
-    if (!pState.guesses.includes(guess)) {
-        pState.guesses.push(guess);
-    }
+      if (isCorrect) {
+          const timeTaken = (Date.now() - (current.roundStartTime || Date.now())) / 1000;
+          const points = calcFlagerPoints(attemptsUsed, timeTaken);
 
-    const isCorrect = guess === targetFlag;
-    const attemptsUsed = pState.guesses.length;
+          pState.score = (pState.score || 0) + points;
+          pState.roundScore = points;
+          pState.hasFinishedRound = true;
+      } else if (attemptsUsed >= 10) {
+          pState.hasFinishedRound = true;
+          pState.roundScore = 0;
+      }
 
-    if (isCorrect) {
-        const timeTaken = (Date.now() - (currentGs.roundStartTime || Date.now())) / 1000;
-        const baseScore = 1000;
-        const guessPenalty = (attemptsUsed - 1) * 50;
-        const timePenalty = Math.floor(timeTaken * 10);
-
-        const points = Math.max(10, baseScore - guessPenalty - timePenalty);
-
-        pState.score = (pState.score || 0) + points;
-        pState.roundScore = points;
-        pState.hasFinishedRound = true;
-    } else if (attemptsUsed >= 10) {
-        pState.hasFinishedRound = true;
-        pState.roundScore = 0;
-    }
-
-    checkRoundEnd(newState, targetFlag);
-    await updateState(newState);
+      checkRoundEnd(newState, targetFlag);
+      return newState;
+    });
   };
 
   const handleTimeout = async () => {
-    const currentGs = stateRef.current.gameState;
-    if (!currentGs || !userId || currentGs.status !== 'playing') return;
-    if (!currentGs.players || !Array.isArray(currentGs.players)) return;
+    if (!userId) return;
+    await updateState((current) => {
+      if (current.status !== 'playing') return null;
+      if (!current.players || !Array.isArray(current.players)) return null;
 
-    const player = currentGs.players.find(p => p.id === userId);
-    if (!player || player.hasFinishedRound) return;
+      const player = current.players.find(p => p.id === userId);
+      if (!player || player.hasFinishedRound) return null;
 
-    const newState: FlagerState = JSON.parse(JSON.stringify(currentGs));
-    if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
+      if (!current.targetChain || current.targetChain.length <= current.currentRoundIndex) return null;
+      const targetFlag = current.targetChain[current.currentRoundIndex].toLowerCase();
 
-    const pIndex = newState.players.findIndex(p => p.id === userId);
-    if (pIndex === -1) return;
-    const pState = newState.players[pIndex];
+      const newState: FlagerState = JSON.parse(JSON.stringify(current));
+      if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
 
-    // Ensure targetChain exists
-    if (!currentGs.targetChain || currentGs.targetChain.length <= currentGs.currentRoundIndex) return;
-    const targetFlag = currentGs.targetChain[currentGs.currentRoundIndex].toLowerCase();
+      const pIndex = newState.players.findIndex(p => p.id === userId);
+      if (pIndex === -1) return null;
+      const pState = newState.players[pIndex];
 
-    pState.hasFinishedRound = true;
-    pState.roundScore = 0;
+      pState.hasFinishedRound = true;
+      pState.roundScore = 0;
 
-    checkRoundEnd(newState, targetFlag);
-    await updateState(newState);
+      checkRoundEnd(newState, targetFlag);
+      return newState;
+    });
   };
 
   const readyNextRound = async () => {
-    if (!stateRef.current.lobbyId || !userId) return;
+    if (!lobbyId || !userId) return;
 
-    const { data } = await supabase.from('lobbies').select('game_state').eq('id', stateRef.current.lobbyId).single();
+    const { data } = await supabase.from('lobbies').select('game_state').eq('id', lobbyId).single();
     const currentGs = data?.game_state as FlagerState;
 
     if (!currentGs || currentGs.status !== 'round_end') return;
@@ -319,8 +255,13 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
   };
 
   const leaveGame = async () => {
-     const currentGs = stateRef.current.gameState;
+     const currentGs = gameStateRef.current;
      if (!lobbyId || !userId || !currentGs) return;
+
+     // A finished match is a record, not live state: leaving must not rewrite
+     // the results the other players are still looking at. Just walk away —
+     // the page navigates us out.
+     if (currentGs.status === 'finished') return;
 
      const newState = JSON.parse(JSON.stringify(currentGs));
      if (!newState.players || !Array.isArray(newState.players)) newState.players = [];
@@ -345,9 +286,7 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
      newState.players = newState.players.filter((p: FlagerPlayerState) => p.id !== userId);
 
      if (newState.players.length === 0) {
-         await supabase.from('lobbies').delete().eq('id', lobbyId);
-         setGameState(null);
-         setLobbyDeleted(true);
+         await deleteLobby();
      } else {
          if (wasHost && newState.players.length > 0) {
             newState.players[0].isHost = true;
@@ -364,15 +303,21 @@ export function useFlagerGame(lobbyId: string | null, userId: string | undefined
                   const sorted = [...gameState.players].sort((a, b) => b.score - a.score);
                   const isWinner = sorted[0].id === userId;
                   const duration = (gameState.targetChain.length * (gameState.settings.roundDuration || 60));
+                  // Mode and flags-guessed count — parity with Minesweeper statistics
+                  const mode = gameState.players.length > 1 ? 'multi' as const : 'single' as const;
+                  const flagsGuessed = (me.history || []).filter(h => h.isCorrect).length;
 
                   updatePlayerStats(userId, {
                       gameType: 'flager',
                       result: isWinner ? 'win' : 'loss',
-                      durationSeconds: duration
+                      durationSeconds: duration,
+                      mode: mode,
+                      extraCount: flagsGuessed
                   });
               }
           }
       }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once when the match finishes; adding gameState.players would re-record stats
   }, [gameState?.status, userId, lobbyDeleted]);
 
   return {

@@ -3,11 +3,13 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { useLang } from '@/hooks/useLang';
+import { defaultAvatar } from '@/constants/app';
 import { Loader2 } from 'lucide-react';
 import { useBattleshipGame } from '@/hooks/useBattleshipGame';
-import { Lang } from '@/types/battleship';
 import UniversalLobby, { LobbyPlayer } from '@/components/UniversalLobby';
 import BattleshipGame from '@/components/BattleshipGame';
+import GameNotJoined from '@/components/GameNotJoined';
 
 interface UserProfile {
     id: string;
@@ -37,7 +39,7 @@ function BattleshipContent() {
 
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [lang, setLang] = useState<Lang>('ru');
+  const { lang } = useLang();
   const [isLeaving, setIsLeaving] = useState(false);
 
   useEffect(() => {
@@ -47,7 +49,7 @@ function BattleshipContent() {
             setUser({
                 id: authUser.id,
                 name: authUser.user_metadata?.username || authUser.email?.split('@')[0] || 'Admiral',
-                avatarUrl: authUser.user_metadata?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${authUser.id}`
+                avatarUrl: authUser.user_metadata?.avatar_url || defaultAvatar(authUser.id)
             });
         } else {
             const currentPath = window.location.pathname + window.location.search;
@@ -56,9 +58,6 @@ function BattleshipContent() {
         setAuthLoading(false);
     };
     fetchUser();
-
-    const savedLang = localStorage.getItem('dg_lang') as Lang;
-    if (savedLang === 'en' || savedLang === 'ru') setLang(savedLang);
   }, [router]);
 
   const {
@@ -67,7 +66,7 @@ function BattleshipContent() {
   } = useBattleshipGame(lobbyId, user);
 
   useEffect(() => {
-    if (user && gameState && !gameState.players?.[user.id]) {
+    if (user && gameState && gameState.status === 'waiting' && !gameState.players?.[user.id]) {
         initGame();
     }
   }, [user, gameState, initGame]);
@@ -116,11 +115,16 @@ function BattleshipContent() {
       );
   }
 
+  // Late visitor: the game is already running and we are not part of it
+  if (gameState.status !== 'waiting' && !gameState.players?.[user.id]) {
+      return <GameNotJoined lang={lang} />;
+  }
+
   if (gameState.status === 'waiting') {
-      const playersList: LobbyPlayer[] = Object.values(gameState.players).map((p: any) => ({
-          id: p.id || p.userId,
+      const playersList: LobbyPlayer[] = Object.values(gameState.players).map((p) => ({
+          id: p.id,
           name: p.name || 'Unknown',
-          avatarUrl: p.avatarUrl || `https://api.dicebear.com/7.x/avataaars/svg?seed=${p.id || p.userId}`,
+          avatarUrl: p.avatarUrl || defaultAvatar(p.id || ''),
           isHost: p.isHost,
           isReady: p.isReady
       }));

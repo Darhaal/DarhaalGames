@@ -1,16 +1,19 @@
 'use client';
 
+import Image from 'next/image';
 import React, { useState, useEffect } from 'react';
 import { SpyfallState } from '@/types/spyfall';
 import { SPYFALL_PACKS, getAllLocations } from '@/data/spyfall/locations';
 import {
   Clock, Eye, EyeOff, User, Map,
   Play, RotateCcw, Crown, Target, Fingerprint,
-  LogOut, CheckCircle2, XCircle, Siren, HelpCircle, ThumbsUp, ThumbsDown, Shield, Star, BookOpen, AlertTriangle
+  CheckCircle2, XCircle, Siren, ThumbsUp, ThumbsDown, Shield, Star
 } from 'lucide-react';
 import GameHeader from './GameHeader';
 import GameRulesModal from './GameRulesModal';
 import { GAME_RULES } from '@/constants/rules';
+import { playSfx } from '@/lib/sound';
+import { useEscape } from '@/hooks/useEscape';
 
 interface SpyfallGameProps {
   gameState: SpyfallState;
@@ -119,63 +122,6 @@ const UI_TEXT = {
   }
 };
 
-const GuideModal = ({ onClose, t }: { onClose: () => void, t: any }) => {
-    const [tab, setTab] = useState<'general' | 'spy' | 'local'>('general');
-
-    return (
-        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
-            <div className="bg-white rounded-[32px] w-full max-w-lg shadow-2xl overflow-hidden animate-in zoom-in-95 border border-[#E6E1DC] flex flex-col max-h-[85vh]">
-                <div className="p-6 bg-[#1A1F26] text-white flex justify-between items-center relative overflow-hidden shrink-0">
-                    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20" />
-                    <h2 className="text-xl font-black uppercase flex items-center gap-2 relative z-10 tracking-widest"><BookOpen className="w-5 h-5 text-[#9e1316]" /> {t.rulesTitle}</h2>
-                    <button onClick={onClose} className="relative z-10 p-2 hover:bg-white/10 rounded-full transition-colors"><XCircle className="w-6 h-6" /></button>
-                </div>
-
-                <div className="flex border-b border-[#E6E1DC] p-2 bg-gray-50 gap-2">
-                    {['general', 'spy', 'local'].map((mode) => (
-                        <button
-                            key={mode}
-                            onClick={() => setTab(mode as any)}
-                            className={`flex-1 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all ${tab === mode ? 'bg-[#1A1F26] text-white shadow-md' : 'text-[#8A9099] hover:bg-gray-200'}`}
-                        >
-                            {t.guide[mode]}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="p-6 space-y-5 text-sm text-[#1A1F26] overflow-y-auto custom-scrollbar leading-relaxed h-full">
-                    {tab === 'general' && (
-                        <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
-                            <div className="flex justify-center"><Map className="w-12 h-12 text-[#9e1316]" /></div>
-                            <p className="text-center font-medium">{t.guide.genText}</p>
-                        </div>
-                    )}
-                    {tab === 'spy' && (
-                        <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
-                             <div className="flex justify-center"><Fingerprint className="w-12 h-12 text-red-600" /></div>
-                             <p className="text-center font-medium">{t.guide.spyText}</p>
-                             <div className="bg-red-50 p-4 rounded-2xl border border-red-100 text-xs font-bold text-red-800">
-                                 <AlertTriangle className="w-4 h-4 inline mr-2"/>
-                                 Цель: Не выдать, что вы не знаете, где находитесь.
-                             </div>
-                        </div>
-                    )}
-                    {tab === 'local' && (
-                        <div className="space-y-4 animate-in fade-in slide-in-from-right-4">
-                             <div className="flex justify-center"><Shield className="w-12 h-12 text-emerald-600" /></div>
-                             <p className="text-center font-medium">{t.guide.localText}</p>
-                             <div className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 text-xs font-bold text-emerald-800">
-                                 <CheckCircle2 className="w-4 h-4 inline mr-2"/>
-                                 Совет: Не задавайте слишком очевидных вопросов, иначе Шпион догадается о локации.
-                             </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-};
-
 export default function SpyfallGame({ gameState, userId, startGame, endGame, restartGame, leaveGame, startNomination, vote, lang }: SpyfallGameProps) {
   const t = UI_TEXT[lang];
   const me = gameState.players.find(p => p.id === userId);
@@ -188,6 +134,10 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
 
   const [showGuessModal, setShowGuessModal] = useState(false);
   const [accuseTarget, setAccuseTarget] = useState<string | null>(null);
+
+  // Escape closes dismissible overlays (voting is mandatory and stays)
+  useEscape(showGuessModal, () => setShowGuessModal(false));
+  useEscape(!!accuseTarget, () => setAccuseTarget(null));
 
   const getLocationData = (id: string) => {
       const allLocs = getAllLocations();
@@ -205,18 +155,33 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
   const activeLocations = getActiveLocations();
 
   useEffect(() => {
-    if (gameState.status !== 'playing' && gameState.status !== 'voting') return;
+    // The round timer only runs while playing — it freezes during voting
+    // (on return from voting, startTime is shifted by the pause duration, see vote())
+    if (gameState.status !== 'playing') return;
     const interval = setInterval(() => {
         const elapsed = Math.floor((Date.now() - gameState.startTime) / 1000);
         const remaining = Math.max(0, gameState.settings.roundDuration - elapsed);
         setTimeLeft(remaining);
         if (remaining === 0) {
-            endGame('spy', 'time');
-            clearInterval(interval);
+            // One primary writer — the host; everyone else backs up after 5s
+            const overdueMs = Date.now() - (gameState.startTime + gameState.settings.roundDuration * 1000);
+            if (isHost || overdueMs > 5000) {
+                endGame('spy', 'time');
+                clearInterval(interval);
+            }
         }
     }, 1000);
     return () => clearInterval(interval);
-  }, [gameState.status, gameState.startTime, gameState.settings.roundDuration, endGame]);
+  }, [gameState.status, gameState.startTime, gameState.settings.roundDuration, endGame, isHost]);
+
+  // Round outcome sound: my side won or lost
+  useEffect(() => {
+      if (gameState.status === 'finished' && gameState.winner && me) {
+          const iWon = (gameState.winner === 'spy' && me.isSpy) || (gameState.winner === 'locals' && !me.isSpy);
+          playSfx(iWon ? 'win' : 'lose');
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- play the sting once per outcome; adding `me` would replay it whenever the player object is rebuilt
+  }, [gameState.status, gameState.winner]);
 
   const toggleCross = (id: string) => {
       if (crossedOut.includes(id)) setCrossedOut(prev => prev.filter(c => c !== id));
@@ -261,7 +226,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
 
       return (
           <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-[#F8FAFC] font-sans relative overflow-hidden">
-              <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
+              <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none" />
 
               <div className="bg-white p-8 md:p-12 rounded-[40px] shadow-2xl border border-[#E6E1DC] text-center max-w-lg w-full animate-in zoom-in-95 relative z-10 flex flex-col gap-8">
                   <div className="relative">
@@ -281,10 +246,13 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                           <span className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest">{t.loc}</span>
                           <div className="w-full h-20 rounded-xl overflow-hidden relative">
                               {actualLocation?.image ? (
-                                  <img
+                                  <Image
                                     src={actualLocation.image}
+                                    alt=""
+                                    fill
+                                    sizes="200px"
                                     onError={handleImageError}
-                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                                    className="object-cover group-hover:scale-110 transition-transform duration-500"
                                   />
                               ) : (
                                   <div className="w-full h-full bg-gray-200 flex items-center justify-center"><Map className="w-6 h-6 text-gray-400" /></div>
@@ -295,7 +263,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                       <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E6E1DC] flex flex-col items-center gap-2">
                           <span className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest">{t.spy}</span>
                           <div className="w-20 h-20 rounded-full border-4 border-white shadow-md overflow-hidden">
-                              <img src={spyPlayer?.avatarUrl} className="w-full h-full object-cover" />
+                              <Image src={spyPlayer?.avatarUrl || "/logo512.png"} alt="" width={80} height={80} className="w-full h-full object-cover" />
                           </div>
                           <span className="font-black text-[#9e1316] leading-none mt-1">{spyPlayer?.name || t.unknown}</span>
                       </div>
@@ -320,7 +288,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
   if (gameState.status === 'waiting') {
       return (
           <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
-              <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none" />
+              <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-30 mix-blend-overlay pointer-events-none" />
 
               <div className="text-center mb-12 relative z-10">
                   <div className="inline-flex items-center gap-2 bg-white px-4 py-2 rounded-full border border-[#E6E1DC] shadow-sm mb-4">
@@ -335,7 +303,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                   {gameState.players.map(p => (
                       <div key={p.id} className="flex flex-col items-center group animate-in zoom-in duration-300">
                           <div className="w-20 h-20 rounded-[24px] bg-white border-4 border-white shadow-lg overflow-hidden relative group-hover:scale-105 transition-transform duration-300">
-                              <img src={p.avatarUrl} className="w-full h-full object-cover" />
+                              <Image src={p.avatarUrl} alt="" width={80} height={80} className="w-full h-full object-cover" />
                               {p.isHost && (
                                   <div className="absolute top-0 right-0 bg-[#FBBF24] p-1.5 rounded-bl-xl shadow-sm">
                                       <Crown className="w-3 h-3 text-white" />
@@ -379,7 +347,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans text-[#1A1F26] relative overflow-hidden flex flex-col">
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
+        <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-40 mix-blend-overlay pointer-events-none fixed" />
 
         <GameRulesModal
           isOpen={showRules}
@@ -405,7 +373,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
             <div className="w-full">
                 <div className="relative group perspective-1000 max-w-lg mx-auto">
                     <div className="bg-white rounded-[32px] p-6 md:p-10 shadow-xl border border-[#E6E1DC] relative overflow-hidden transition-all duration-500">
-                        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-overlay" />
+                        <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-10 mix-blend-overlay" />
 
                         <div className="relative z-10 text-center flex flex-col items-center min-h-[160px] justify-center">
                             <div className="text-[10px] font-black text-[#8A9099] uppercase tracking-[0.3em] mb-4 flex items-center gap-2 border border-[#E6E1DC] px-3 py-1 rounded-full">
@@ -480,10 +448,13 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                                 `}
                             >
                                 {loc.image ? (
-                                    <img
+                                    <Image
                                         src={loc.image}
+                                        alt=""
+                                        fill
+                                        sizes="(max-width: 768px) 50vw, 200px"
                                         onError={handleImageError}
-                                        className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                                        className="object-cover transition-transform duration-700 group-hover:scale-110"
                                     />
                                 ) : (
                                     <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200" />
@@ -519,7 +490,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                                     <div className="flex items-center gap-3 overflow-hidden">
                                         <div className="relative shrink-0">
                                             <div className="w-10 h-10 rounded-full bg-gray-100 border-2 border-white shadow-sm overflow-hidden">
-                                                <img src={p.avatarUrl} className="w-full h-full object-cover" />
+                                                <Image src={p.avatarUrl} alt="" width={80} height={80} className="w-full h-full object-cover" />
                                             </div>
                                             {p.isHost && <div className="absolute -top-1 -right-1 bg-[#FBBF24] p-0.5 rounded-full border border-white shadow-sm"><Crown className="w-2.5 h-2.5 text-white" /></div>}
                                         </div>
@@ -555,8 +526,8 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
 
         {/* GUESS LOCATION MODAL */}
         {showGuessModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-md animate-in fade-in">
-                <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 border border-[#E6E1DC] flex flex-col max-h-[80vh]">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-md animate-in fade-in" onClick={() => setShowGuessModal(false)}>
+                <div className="bg-white rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 border border-[#E6E1DC] flex flex-col max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
                     <div className="p-6 border-b border-[#F1F5F9] flex justify-between items-center bg-white sticky top-0 z-10">
                         <h3 className="font-black text-lg text-[#1A1F26] uppercase flex items-center gap-2"><Target className="w-5 h-5 text-[#9e1316]"/> {t.guessTitle}</h3>
                         <button onClick={() => setShowGuessModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><XCircle className="w-6 h-6 text-gray-400" /></button>
@@ -569,10 +540,13 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                                 className="relative p-4 rounded-xl border border-[#E6E1DC] font-bold text-sm text-white hover:scale-[1.02] transition-all text-center overflow-hidden h-24 flex items-center justify-center shadow-sm group bg-[#1A1F26]"
                             >
                                 {loc.image ? (
-                                    <img
+                                    <Image
                                         src={loc.image}
+                                        alt=""
+                                        fill
+                                        sizes="(max-width: 640px) 50vw, 220px"
                                         onError={handleImageError}
-                                        className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-40 transition-opacity"
+                                        className="object-cover opacity-60 group-hover:opacity-40 transition-opacity"
                                     />
                                 ) : (
                                     <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black opacity-60" />
@@ -587,8 +561,8 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
 
         {/* ACCUSE CONFIRMATION MODAL */}
         {accuseTarget && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-md animate-in fade-in">
-                <div className="bg-white p-8 rounded-[32px] max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 border border-[#E6E1DC]">
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-md animate-in fade-in" onClick={() => setAccuseTarget(null)}>
+                <div className="bg-white p-8 rounded-[32px] max-w-sm w-full text-center shadow-2xl animate-in zoom-in-95 border border-[#E6E1DC]" onClick={(e) => e.stopPropagation()}>
                     <div className="w-16 h-16 bg-red-50 text-[#9e1316] rounded-2xl flex items-center justify-center mx-auto mb-4 border border-red-100 shadow-sm">
                         <Siren className="w-8 h-8 animate-pulse" />
                     </div>

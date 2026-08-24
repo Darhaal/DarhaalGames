@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 
-export type GameType = 'minesweeper' | 'flager' | 'battleship' | 'coup';
+export type GameType = 'minesweeper' | 'flager' | 'battleship' | 'coup' | 'spyfall';
 export type GameResult = 'win' | 'loss';
 export type GameMode = 'single' | 'multi';
 
@@ -9,7 +9,7 @@ interface GameSessionStats {
     result: GameResult;
     durationSeconds: number;
     mode?: GameMode;
-    extraCount?: number; // Новое поле для "стран угадано" или "мин найдено"
+    extraCount?: number; // Extra field for "countries guessed" or "mines found"
 }
 
 export async function updatePlayerStats(userId: string, session: GameSessionStats) {
@@ -32,7 +32,8 @@ export async function updatePlayerStats(userId: string, session: GameSessionStat
             minesweeper: { wins: 0, lost: 0, time: 0 },
             flager: { wins: 0, lost: 0, time: 0 },
             battleship: { wins: 0, lost: 0, time: 0 },
-            coup: { wins: 0, lost: 0, time: 0 }
+            coup: { wins: 0, lost: 0, time: 0 },
+            spyfall: { wins: 0, lost: 0, time: 0 }
         };
 
         const { gameType, result, durationSeconds, mode, extraCount } = session;
@@ -46,7 +47,7 @@ export async function updatePlayerStats(userId: string, session: GameSessionStat
                 };
             }
 
-            // Миграция старых данных
+            // Legacy data migration
             if (typeof details[gameType].wins === 'number') {
                 const oldStats = { ...details[gameType], extra: 0 };
                 details[gameType] = {
@@ -63,7 +64,7 @@ export async function updatePlayerStats(userId: string, session: GameSessionStat
             if (result === 'win') targetStat.wins++;
             else targetStat.lost++;
             targetStat.time += minutesPlayed;
-            // Обновляем доп. статистику
+            // Update the extra metric
             if (extraCount) {
                 targetStat.extra = (targetStat.extra || 0) + extraCount;
             }
