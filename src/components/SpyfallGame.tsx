@@ -4,6 +4,7 @@ import Image from 'next/image';
 import React, { useState, useEffect } from 'react';
 import { SpyfallState } from '@/types/spyfall';
 import { SPYFALL_PACKS, getAllLocations } from '@/data/spyfall/locations';
+import LocationArt from '@/components/spyfall/LocationArt';
 import {
   Clock, Eye, EyeOff, User, Map,
   Play, RotateCcw, Crown, Target, Fingerprint,
@@ -213,11 +214,6 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
   };
 
   // Helper for image fallback
-  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
-      e.currentTarget.style.display = 'none';
-      e.currentTarget.parentElement?.classList.add('bg-gradient-to-br', 'from-gray-800', 'to-black');
-  };
-
   if (gameState.status === 'finished') {
       const spyPlayer = gameState.players.find(p => p.isSpy);
       const actualLocation = getLocationData(gameState.currentLocationId || '');
@@ -245,15 +241,8 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                       <div className="bg-[#F8FAFC] p-4 rounded-2xl border border-[#E6E1DC] flex flex-col items-center gap-2 group">
                           <span className="text-[10px] font-black text-[#8A9099] uppercase tracking-widest">{t.loc}</span>
                           <div className="w-full h-20 rounded-xl overflow-hidden relative">
-                              {actualLocation?.image ? (
-                                  <Image
-                                    src={actualLocation.image}
-                                    alt=""
-                                    fill
-                                    sizes="200px"
-                                    onError={handleImageError}
-                                    className="object-cover group-hover:scale-110 transition-transform duration-500"
-                                  />
+                              {actualLocation ? (
+                                  <LocationArt locationId={actualLocation.id} className="group-hover:scale-110 transition-transform duration-500" />
                               ) : (
                                   <div className="w-full h-full bg-gray-200 flex items-center justify-center"><Map className="w-6 h-6 text-gray-400" /></div>
                               )}
@@ -447,18 +436,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                                     ${crossedOut.includes(loc.id) ? 'opacity-40 grayscale scale-95' : 'hover:shadow-lg hover:scale-[1.02]'}
                                 `}
                             >
-                                {loc.image ? (
-                                    <Image
-                                        src={loc.image}
-                                        alt=""
-                                        fill
-                                        sizes="(max-width: 768px) 50vw, 200px"
-                                        onError={handleImageError}
-                                        className="object-cover transition-transform duration-700 group-hover:scale-110"
-                                    />
-                                ) : (
-                                    <div className="absolute inset-0 bg-gradient-to-br from-gray-100 to-gray-200" />
-                                )}
+                                <LocationArt locationId={loc.id} className="transition-transform duration-700 group-hover:scale-110" />
 
                                 <div className="absolute inset-0 bg-black/40 group-hover:bg-black/20 transition-colors" />
                                 <div className="absolute inset-0 flex items-center justify-center p-2">
@@ -539,18 +517,7 @@ export default function SpyfallGame({ gameState, userId, startGame, endGame, res
                                 onClick={() => handleSpyGuess(loc.id)}
                                 className="relative p-4 rounded-xl border border-[#E6E1DC] font-bold text-sm text-white hover:scale-[1.02] transition-all text-center overflow-hidden h-24 flex items-center justify-center shadow-sm group bg-[#1A1F26]"
                             >
-                                {loc.image ? (
-                                    <Image
-                                        src={loc.image}
-                                        alt=""
-                                        fill
-                                        sizes="(max-width: 640px) 50vw, 220px"
-                                        onError={handleImageError}
-                                        className="object-cover opacity-60 group-hover:opacity-40 transition-opacity"
-                                    />
-                                ) : (
-                                    <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black opacity-60" />
-                                )}
+                                <LocationArt locationId={loc.id} className="opacity-60 group-hover:opacity-40 transition-opacity" />
                                 <span className="relative z-10 text-shadow uppercase tracking-wide">{loc.name[lang]}</span>
                             </button>
                         ))}

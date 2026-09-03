@@ -1,6 +1,6 @@
 # Darhaal Games
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue.svg) ![License](https://img.shields.io/badge/license-View%20%26%20Study%20Only-red.svg) ![Tests](https://img.shields.io/badge/tests-93-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-2.2.0-blue.svg) ![License](https://img.shields.io/badge/license-View%20%26%20Study%20Only-red.svg) ![Tests](https://img.shields.io/badge/tests-176-brightgreen.svg)
 
 Five board and logic games you can play with friends in a browser. One person
 creates a room, shares the link, everyone else joins — no install, no account
@@ -48,7 +48,7 @@ build if any attack succeeds.
 
 | Game | Players | Notable bits |
 |------|---------|--------------|
-| **Spyfall** | 3–12 | Hidden roles, ten location packs, live vote tallying |
+| **Spyfall** | 3–12 | 15 packs, 330 locations, 20 roles each; artwork generated per card, nothing fetched |
 | **Minesweeper** | 1–4 | Pan/zoom viewport, first-click safety, chording, identical grids for a fair race |
 | **Flager** | 1–4 | Canvas pixel-reveal mechanic, ~200 countries, score decays with time |
 | **Battleship** | 2 | Drag-and-drop placement with live rule validation, extra turn on a hit |
@@ -106,7 +106,7 @@ not forgotten.
 | Hosting | Vercel |
 
 No state-management library: the shared sync hook and React state cover it.
-Zero `any`, zero `@ts-ignore`, zero dependency vulnerabilities, 93 tests.
+Zero `any`, zero `@ts-ignore`, zero dependency vulnerabilities, 176 tests.
 
 ---
 

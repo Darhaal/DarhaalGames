@@ -32,9 +32,16 @@ export const APP_TAGLINE = {
 /** Locale served at the bare path; the other locale lives under /en */
 export const DEFAULT_LOCALE = 'ru' as const;
 
-/** Default generated avatar for a given seed (user id, nickname, etc.) */
+/**
+ * Default generated avatar for a given seed (user id, nickname, etc.).
+ *
+ * Served from our own `/avatar/[seed]` route rather than api.dicebear.com:
+ * the seed is usually the Supabase user id, and sending those to a third
+ * party on every render bought us nothing. The route renders the same DiceBear
+ * artwork locally and is cached immutably.
+ */
 export const defaultAvatar = (seed: string) =>
-  `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed)}&backgroundColor=transparent`;
+  `/avatar/${encodeURIComponent(seed)}`;
 
 /** Room code alphabet and length (must match the unique index expectations) */
 export const ROOM_CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';

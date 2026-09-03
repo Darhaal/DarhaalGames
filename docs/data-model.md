@@ -92,6 +92,26 @@ All shapes share: `version: number`, `lastActionTime: number`,
 > `UniversalLobby`, player counting in `/play`) branches on
 > `Array.isArray(players)`.
 
+## Avatars
+
+`profiles.avatar_url` holds one of two things:
+
+- an uploaded file in the `avatars` storage bucket, or
+- a path like `/avatar/<seed>`, served by the app's own route.
+
+That second form used to be a full `api.dicebear.com` URL. The seed is the
+Supabase user id, so every avatar render sent a user identifier to a third
+party and depended on their uptime. The route at
+[`src/app/avatar/[seed]/route.ts`](../src/app/avatar/[seed]/route.ts) renders
+the same artwork locally from `@dicebear/core`, marked immutable so the edge
+cache serves it after the first render.
+
+Storing a data URI instead was considered and rejected: the SVG is ~4.4 KB, so
+it would have gone into every profile row and every copy of a player inside
+`game_state`.
+
+Existing rows were migrated in place; uploaded avatars were left untouched.
+
 ## Lobby lifecycle & cleanup
 
 A room is removed in exactly two ways:

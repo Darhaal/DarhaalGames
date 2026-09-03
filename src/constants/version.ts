@@ -1,4 +1,4 @@
-export const APP_VERSION = '2.1.0';
+export const APP_VERSION = '2.2.0';
 
 export type VersionType = 'major' | 'minor' | 'patch' | 'init';
 
@@ -11,6 +11,19 @@ export interface VersionLog {
 }
 
 export const VERSION_HISTORY: VersionLog[] = [
+  /* ===================== 2.2.x ===================== */
+
+  {
+    ver: '2.2.0',
+    date: '2 SEP 2026',
+    type: 'minor',
+    title: { ru: 'Большой Шпион', en: 'Spyfall Expanded' },
+    desc: {
+      ru: 'Шпион вырос с 30 локаций до 330: пятнадцать наборов по 22 локации, у каждой по 20 ролей. Новые наборы — природа, история, фантастика, спорт и еда. У карточек локаций появилось оформление, которое рисуется на месте и ничего не загружает.',
+      en: 'Spyfall grew from 30 locations to 330: fifteen packs of 22, with 20 roles each. New packs for nature, history, sci-fi, sports and food. Location cards now have artwork that is drawn on the spot and downloads nothing.'
+    }
+  },
+
   /* ===================== 2.1.x ===================== */
 
   {

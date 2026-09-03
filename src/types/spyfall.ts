@@ -8,7 +8,12 @@ export interface SpyfallLocation {
   id: string;
   name: { ru: string; en: string };
   roles: SpyfallRole[];
-  image: string; // Image path
+  /**
+   * Optional artwork path. No location currently ships one: every reader
+   * guards with `loc.image ? ... : fallback`, and the card already renders the
+   * location name over a scrim, so the fallback reads perfectly well.
+   */
+  image?: string;
 }
 
 export interface SpyfallPack {

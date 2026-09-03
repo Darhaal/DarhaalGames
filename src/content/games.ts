@@ -72,7 +72,7 @@ export const GAMES_CONTENT: GameContent[] = [
         ],
         howToPlay: [
           'Создайте комнату и отправьте друзьям ссылку или шестизначный код.',
-          'Выберите тематический пак локаций: школа, университет, офис, хоррор, игры и другие.',
+          'Выберите тематический набор: школа, универ, офис, хоррор, игры, природа, история, фантастика, спорт, еда и другие.',
           'После старта откройте свою карточку: вы увидите локацию и роль — либо надпись, что вы шпион.',
           'По очереди задавайте вопросы другим игрокам и внимательно слушайте ответы.',
           'Заподозрив кого-то, вынесите обвинение — остальные проголосуют за или против.',
@@ -80,7 +80,7 @@ export const GAMES_CONTENT: GameContent[] = [
         ],
         features: [
           'От 3 до 12 игроков в одной комнате',
-          'Десять тематических паков локаций',
+          '15 тематических наборов, 330 локаций',
           'Настраиваемая длительность раунда',
           'Голосование с подсчётом голосов в реальном времени',
           'Статистика побед за мирных и за шпиона'
@@ -129,7 +129,7 @@ export const GAMES_CONTENT: GameContent[] = [
         ],
         howToPlay: [
           'Create a room and share the link or the six-character code with your friends.',
-          'Pick a themed location pack: school, university, office, horror, gaming and more.',
+          'Pick a themed pack: school, university, office, horror, gaming, nature, history, sci-fi, sports, food and more.',
           'Once the round starts, open your card to see the location and your role — or the note that you are the spy.',
           'Take turns asking other players questions and listen closely to the answers.',
           'When you suspect someone, call them out and let the table vote.',
@@ -137,7 +137,7 @@ export const GAMES_CONTENT: GameContent[] = [
         ],
         features: [
           'Three to twelve players per room',
-          'Ten themed location packs',
+          '15 themed packs, 330 locations',
           'Adjustable round length',
           'Live vote tallying',
           'Separate win statistics for civilians and the spy'

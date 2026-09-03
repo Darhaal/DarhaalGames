@@ -7,6 +7,24 @@ releasing.
 Format: [Semantic Versioning](https://semver.org/). Types: **major** = platform
 milestone, **minor** = new game mode / feature, **patch** = fixes & improvements.
 
+## [2.2.0] — 2026-09-02 (minor) — **Spyfall Expanded**
+
+### Added
+- **Spyfall content**: 15 packs of 22 locations with 20 roles each — 330
+  locations and 6600 roles, up from 30 and 150. New packs: Nature, History,
+  Sci-Fi, Sports, Food.
+- **Location artwork**, generated per card rather than downloaded: a
+  deterministic colour field seeded by the location id plus a thematic icon.
+  No requests, no hosting bandwidth, identical for every player.
+
+### Fixed
+- Location images had been returning **404 since the packs were written** —
+  `public/spyfall/` was never populated. The UI hid the broken image behind a
+  gradient, so it degraded quietly instead of visibly.
+- **Avatars no longer call a third party.** The previous URL sent the Supabase
+  user id to `api.dicebear.com` on every render; the same artwork is now
+  produced by the app itself and cached immutably.
+
 ## [2.1.0] — 2026-08-20 (minor) — **New Home**
 
 > The platform moves to its own domain and gains a public, crawlable surface.
